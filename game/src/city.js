@@ -1,266 +1,184 @@
-// The city of Solmar Bay: a seeded grid of roads and blocks, a beach
-// and ocean to the east, a working port to the north-west, and a
-// downtown of glass towers at the centre. Everything static is baked
-// into two meshes (lit + plain) at build time, so the frame loop only
-// draws the moving parts.
+// Solmar Bay v4 — the city itself: buildings, palms, port, marina.
 //
-// The city also owns the named spawn points every system shares: where
-// Mara starts, where Reyes' garage is, where the races start, where
-// the boats dock, and where the missions point.
+// Buildings fill the blocks between roads, each a seeded box with a
+// pastel facade, a darker roof slab and sometimes a neon sign. The
+// port occupies the south-east corner (cranes + containers), the
+// marina sits on the south-west shore, and a park breaks up the
+// middle. All of it merges into one static mesh; the builder also
+// returns collision boxes and the named places missions need.
 
-import { Builder } from './gl.js';
-import { WORLD, PALETTE } from './config.js';
-import { makeRng, range, rangeInt, pick, chance } from './random.js';
+import { CFG } from './config.js';
+import { boxGeo, cylGeo, makeMesh, mergeGeos, quadGeo } from './gl.js';
+import { roadLines } from './world.js';
 
-export class City {
-  constructor(seed) {
-    this.seed = seed;
-    this.rng = makeRng(seed);
-    this.buildings = []; // {x, z, w, d, h} — for collision + minimap
-    this.palms = [];
-    this.lamps = [];
-    this.spawns = {
-      player: [-40, 40],
-      reyesGarage: [40, 200],
-      portGate: [-200, -280],
-      marina: [280, 280],
-      junoPickup: [-240, -240],
-      safehouse: [-120, 280],
-      rivalCamp: [-200, 200],
-      beachDrop: [340, 120],
-      portTruck: [-280, -200],
-      sportsParked: [120, 40],
-      getawayCar: [280, 200],
-      vault: [0, 80],
-      cordon: [120, 120],
-      raceStart: [200, 40],
-      boatDock: [300, 300],
-    };
-    this.build();
+const FACADES = [
+  [0.92, 0.82, 0.72], [0.85, 0.78, 0.70], [0.78, 0.84, 0.88],
+  [0.94, 0.88, 0.78], [0.82, 0.74, 0.66], [0.88, 0.80, 0.82],
+  [0.75, 0.80, 0.78], [0.90, 0.76, 0.66],
+];
+const NEON = [
+  [1.0, 0.25, 0.55], [0.25, 0.9, 1.0], [1.0, 0.8, 0.2],
+  [0.6, 0.3, 1.0], [0.3, 1.0, 0.5],
+];
+const LEAF = [0.25, 0.55, 0.25];
+const TRUNK = [0.45, 0.32, 0.2];
+
+export function buildCity(ctx, rng) {
+  const parts = [];
+  const colliders = [];
+  const lines = roadLines();
+
+  // --- buildings: one or two towers per block -----------------------
+  let placed = 0;
+  for (let ix = 0; ix < lines.length - 1 && placed < CFG.buildingCount; ix += 1) {
+    for (let iz = 0; iz < lines.length - 1 && placed < CFG.buildingCount; iz += 1) {
+      const x0 = lines[ix] + CFG.roadWidth / 2 + 2;
+      const x1 = lines[ix + 1] - CFG.roadWidth / 2 - 2;
+      const z0 = lines[iz] + CFG.roadWidth / 2 + 2;
+      const z1 = lines[iz + 1] - CFG.roadWidth / 2 - 2;
+      // Skip the park block and the marina strip.
+      if (ix === 4 && iz === 4) continue;
+      if (ix === 0 && iz >= 7) continue;
+      const cx = (x0 + x1) / 2 + rng.range(-2, 2);
+      const cz = (z0 + z1) / 2 + rng.range(-2, 2);
+      const w = rng.range(10, x1 - x0 - 2);
+      const d = rng.range(10, z1 - z0 - 2);
+      const h = rng.range(7, 38);
+      const facade = rng.pick(FACADES);
+      parts.push(boxGeo(w, h, d, facade, [cx, h / 2, cz]));
+      // Roof slab + the occasional rooftop unit.
+      parts.push(boxGeo(w * 0.9, 0.8, d * 0.9, [0.45, 0.45, 0.48], [cx, h + 0.4, cz]));
+      if (rng.chance(0.4)) {
+        parts.push(boxGeo(3, 2.5, 3, [0.6, 0.6, 0.62], [cx + w * 0.2, h + 1.6, cz - d * 0.15]));
+      }
+      // Neon sign on one face for a third of the buildings.
+      if (rng.chance(0.33)) {
+        const neon = rng.pick(NEON);
+        parts.push(boxGeo(0.4, rng.range(2, 5), rng.range(4, 8), neon, [cx + w / 2 + 0.3, h * 0.6, cz]));
+      }
+      // Window strips: darker bands wrapping the tower.
+      const floors = Math.floor(h / 4);
+      for (let f = 1; f < floors; f += 1) {
+        parts.push(boxGeo(w + 0.2, 0.7, d + 0.2, [0.25, 0.32, 0.42], [cx, f * 4, cz]));
+      }
+      colliders.push({ minX: cx - w / 2, maxX: cx + w / 2, minZ: cz - d / 2, maxZ: cz + d / 2 });
+      placed += 1;
+    }
   }
 
-  build() {
-    const rng = this.rng;
-    const lit = new Builder(true);
-    const plain = new Builder(false);
-    const P = PALETTE;
-    const B = WORLD.bound;
-
-    // Ground slab (grass) and the sand strip + sea.
-    lit.box(0, -0.6, 0, B * 2 + 200, 1, B * 2 + 200, P.grass);
-    lit.box((WORLD.sandX + WORLD.seaX) / 2 + 20, -0.4, 0, (WORLD.seaX - WORLD.sandX) + 40, 1, B * 2 + 200, P.sand);
-    // Sea: a big flat sheet, slightly glossy-looking via the plain pass.
-    plain.box(WORLD.seaX + 120, -0.2, 0, 260, 1, B * 2 + 200, P.sea);
-    // A lighter surf line where the waves break.
-    plain.box(WORLD.seaX - 2, 0.05, 0, 4, 0.2, B * 2 + 200, [0.75, 0.9, 0.95]);
-
-    // Roads: dark strips on both axes, with centre dashes and edge lines.
-    for (const c of WORLD.grid) {
-      lit.box(c, 0.02, 0, WORLD.roadHalf * 2, 0.12, B * 2, P.asphalt);
-      lit.box(0, 0.02, c, B * 2, 0.12, WORLD.roadHalf * 2, P.asphalt);
-      for (let d = -B + 10; d < B - 10; d += 16) {
-        lit.box(c, 0.1, d, 0.7, 0.06, 6, P.linePaint);
-        lit.box(d, 0.1, c, 6, 0.06, 0.7, P.linePaint);
-      }
+  // --- palms along the beach and the park ---------------------------
+  function palm(x, z, s) {
+    parts.push(cylGeo(0.25 * s, 0.35 * s, 7 * s, 6, TRUNK, [x, 3.5 * s, z]));
+    const top = 7 * s;
+    for (let i = 0; i < 5; i += 1) {
+      const a = (i / 5) * Math.PI * 2;
+      parts.push(boxGeo(4.5 * s, 0.15, 1.1 * s, LEAF, [
+        x + Math.cos(a) * 1.8 * s, top + 0.2, z + Math.sin(a) * 1.8 * s,
+      ]));
     }
-
-    // Sidewalk skirts around every block.
-    for (const bx of WORLD.blocks) {
-      for (const bz of WORLD.blocks) {
-        if (bx > 240) continue; // beach blocks have no sidewalks
-        lit.box(bx, 0.06, bz, WORLD.blockSize + 12, 0.14, WORLD.blockSize + 12, P.walkway);
-      }
-    }
-
-    // Buildings: downtown gets one tall tower per block; every other
-    // block gets two or three smaller buildings, so the city passes
-    // a hundred rooftops. Downtown towers get glass tops; every tower
-    // gets rooftop props.
-    for (const bx of WORLD.blocks) {
-      for (const bz of WORLD.blocks) {
-        if (bx > 240) continue;
-        const downtown = Math.abs(bx) <= 80 && Math.abs(bz) <= 80;
-        const nearDowntown = Math.abs(bx) <= 160 && Math.abs(bz) <= 160;
-        const slots = downtown
-          ? [[0, 0]]
-          : chance(rng, 0.5)
-            ? [[-16, -16], [16, -16], [0, 16]]
-            : [[-14, -14], [14, 14]];
-        for (const [ox, oz] of slots) {
-          const w = downtown ? range(rng, 26, 34) : range(rng, 13, 22);
-          const d = downtown ? range(rng, 26, 34) : range(rng, 13, 22);
-          let h;
-          if (downtown) h = range(rng, 55, 110);
-          else if (nearDowntown) h = range(rng, 22, 48);
-          else h = range(rng, 10, 30);
-          const x = bx + ox;
-          const z = bz + oz;
-          const facade = pick(rng, P.facades);
-          lit.box(x, h / 2, z, w, h, d, facade);
-          // Roof slab + props (AC units, water tank, antenna).
-          lit.boxTop(x, h + 0.4, z, w + 1, 0.8, d + 1, facade, [0.32, 0.3, 0.3]);
-          if (chance(rng, 0.8)) lit.box(x + range(rng, -w / 4, w / 4), h + 1.6, z + range(rng, -d / 4, d / 4), 4, 2.4, 3, [0.45, 0.45, 0.46]);
-          if (chance(rng, 0.5)) lit.cylinder(x + range(rng, -w / 4, w / 4), h + 2.4, z + range(rng, -d / 4, d / 4), 1.8, 3.4, [0.6, 0.55, 0.5], 8);
-          if (chance(rng, 0.4)) lit.cylinder(x, h + 4, z, 0.25, 8, [0.3, 0.3, 0.32], 6);
-          if (downtown && chance(rng, 0.5)) {
-            // Glass crown on the tallest towers.
-            lit.box(x, h + 3, z, w * 0.5, 5, d * 0.5, [0.35, 0.55, 0.7]);
-          }
-          // Windows: lit and dark, stamped on all four faces.
-          const rows = Math.max(2, Math.floor(h / 7));
-          const colsX = Math.max(2, Math.floor(w / 5));
-          const colsZ = Math.max(2, Math.floor(d / 5));
-          for (let r = 0; r < rows; r++) {
-            const wy = 4 + r * 7;
-            for (let cxi = 0; cxi < colsX; cxi++) {
-              const wx = x - w / 2 + 3 + cxi * ((w - 6) / Math.max(1, colsX - 1));
-              const litWin = chance(rng, 0.45);
-              const col = litWin ? P.litWindow : P.darkWindow;
-              plain.face(wx, wy, z + d / 2 + 0.06, 0, 0, 1, 1, 0, 0, 0, 1, 0, 2.6, 3.6, col);
-              plain.face(wx, wy, z - d / 2 - 0.06, 0, 0, -1, -1, 0, 0, 0, 1, 0, 2.6, 3.6, col);
-            }
-            for (let czi = 0; czi < colsZ; czi++) {
-              const wz = z - d / 2 + 3 + czi * ((d - 6) / Math.max(1, colsZ - 1));
-              const litWin = chance(rng, 0.45);
-              const col = litWin ? P.litWindow : P.darkWindow;
-              plain.face(x + w / 2 + 0.06, wy, wz, 1, 0, 0, 0, 0, -1, 0, 1, 0, 2.6, 3.6, col);
-              plain.face(x - w / 2 - 0.06, wy, wz, -1, 0, 0, 0, 0, 1, 0, 1, 0, 2.6, 3.6, col);
-            }
-          }
-          this.buildings.push({ x, z, w, d, h });
-        }
-      }
-    }
-
-    // Reyes' garage: a low workshop block with a big roller door, at
-    // the garage spawn — the green beacon in the world marks it.
-    lit.box(40, 3, 208, 22, 6, 14, [0.55, 0.52, 0.48]);
-    lit.box(40, 2.2, 200.6, 16, 4.4, 0.4, [0.3, 0.55, 0.8]);
-    lit.boxTop(40, 6.4, 208, 23, 0.8, 15, [0.5, 0.47, 0.44], [0.32, 0.3, 0.3]);
-    plain.face(40, 5.2, 200.5, 0, 0, -1, -1, 0, 0, 0, 1, 0, 14, 1.6, [1.0, 0.75, 0.2]);
-
-    // Palms: along the beach, the marina, and scattered on blocks.
-    for (let z = -B + 20; z < B - 20; z += 26) {
-      this.addPalm(lit, WORLD.sandX + 8 + range(rng, -4, 10), z + range(rng, -6, 6), rng);
-    }
-    for (let i = 0; i < 42; i++) {
-      const bx = pick(rng, WORLD.blocks);
-      const bz = pick(rng, WORLD.blocks);
-      if (bx > 240) continue;
-      this.addPalm(lit, bx + range(rng, -26, 26), bz + range(rng, -26, 26), rng);
-    }
-    for (let i = 0; i < 10; i++) {
-      this.addPalm(lit, range(rng, 200, 300), range(rng, 220, 320), rng);
-    }
-
-    // Streetlights along the main roads.
-    for (const c of WORLD.grid) {
-      for (let d = -B + 20; d < B - 20; d += 80) {
-        const lx = c + WORLD.roadHalf + 2;
-        lit.cylinder(lx, 4, d, 0.25, 8, [0.25, 0.25, 0.28], 6);
-        lit.box(lx - 1.2, 8, d, 2.6, 0.3, 0.3, [0.25, 0.25, 0.28]);
-        plain.box(lx - 2.2, 7.8, d, 1.2, 0.5, 0.6, [1.0, 0.9, 0.6]);
-        this.lamps.push([lx, d]);
-        lit.cylinder(d, 4, c + WORLD.roadHalf + 2, 0.25, 8, [0.25, 0.25, 0.28], 6);
-        lit.box(d, 8, c + WORLD.roadHalf + 0.8, 0.3, 0.3, 2.6, [0.25, 0.25, 0.28]);
-        plain.box(d, 7.8, c + WORLD.roadHalf - 0.2, 0.6, 0.5, 1.2, [1.0, 0.9, 0.6]);
-      }
-    }
-
-    // The port: cranes, container stacks, a warehouse row.
-    const portX = -280;
-    const portZ = -280;
-    for (let i = 0; i < 3; i++) {
-      const cx = portX + i * 55;
-      const cz = portZ + 20;
-      lit.box(cx, 18, cz, 5, 36, 5, P.cranePaint);
-      lit.box(cx + 12, 36, cz, 30, 3, 3, P.cranePaint);
-      lit.box(cx - 8, 36, cz, 14, 3, 3, P.cranePaint);
-      lit.cylinder(cx + 24, 30, cz, 0.3, 12, [0.2, 0.2, 0.22], 6);
-      lit.box(cx + 24, 24, cz, 4, 3, 4, [0.25, 0.25, 0.26]);
-    }
-    for (let i = 0; i < 26; i++) {
-      const x = portX - 40 + range(rng, 0, 150);
-      const z = portZ - 60 + range(rng, 0, 90);
-      const col = pick(rng, P.boxColors);
-      const stack = rangeInt(rng, 1, 3);
-      for (let s = 0; s < stack; s++) {
-        lit.boxTop(x, 1.6 + s * 3.2, z, 12, 3, 5, col, [col[0] * 0.85, col[1] * 0.85, col[2] * 0.85]);
-      }
-    }
-    lit.box(portX - 20, 6, portZ + 80, 60, 12, 24, [0.7, 0.68, 0.62]);
-    lit.box(portX + 60, 6, portZ + 80, 60, 12, 24, [0.66, 0.64, 0.6]);
-
-    // Marina: a pier + moored boats.
-    for (let i = 0; i < 5; i++) {
-      const px = 300 + i * 18;
-      lit.box(px, 0.8, 300, 10, 1.4, 60, [0.55, 0.45, 0.32]);
-      lit.box(px, 1.6, 322, 6, 2.4, 14, pick(rng, [[0.9, 0.9, 0.92], [0.2, 0.5, 0.8], [0.8, 0.3, 0.2]]));
-    }
-
-    // A park in the middle of town: trees + a fountain disc.
-    for (let i = 0; i < 12; i++) {
-      const x = range(rng, -60, 60);
-      const z = range(rng, -60, 60);
-      lit.cylinder(x, 2.5, z, 0.5, 5, P.trunk, 7);
-      lit.cone(x, 8, z, 4.5, 7, [0.2, 0.5, 0.25], 8);
-    }
-    lit.cylinder(0, 0.6, 0, 8, 1.2, [0.6, 0.62, 0.66], 16);
-    plain.disc(0, 1.25, 0, 7, [0.4, 0.75, 0.9], 20);
-
-    // Neon signs on a few downtown towers (plain pass = unlit glow).
-    const signCols = [[1.0, 0.3, 0.6], [0.3, 0.9, 1.0], [1.0, 0.7, 0.2], [0.6, 1.0, 0.4]];
-    for (let i = 0; i < 8; i++) {
-      const b = this.buildings[Math.floor(rng() * this.buildings.length)];
-      if (!b || b.h < 30) continue;
-      plain.face(b.x, b.h * 0.7, b.z + b.d / 2 + 0.12, 0, 0, 1, 1, 0, 0, 0, 1, 0, 10, 2.4, pick(rng, signCols));
-    }
-
-    this.litBuilder = lit;
-    this.plainBuilder = plain;
+  }
+  for (let i = 0; i < CFG.palmCount; i += 1) {
+    const beachSide = rng.chance(0.6);
+    const x = beachSide ? rng.range(-148, -138) : rng.range(-24, 24);
+    const z = beachSide ? rng.range(-150, 150) : rng.range(-24, 24);
+    palm(x, z, rng.range(0.8, 1.3));
   }
 
-  addPalm(lit, x, z, rng) {
-    const h = range(rng, 7, 11);
-    const lean = range(rng, -0.12, 0.12);
-    lit.cylinder(x, h / 2, z, 0.35, h, PALETTE.trunk, 7);
-    const topX = x + lean * h;
-    for (let i = 0; i < 6; i++) {
-      const a = (i / 6) * Math.PI * 2 + rng() * 0.5;
-      const fx = topX + Math.cos(a) * 2.2;
-      const fz = z + Math.sin(a) * 2.2;
-      lit.cone(fx, h + 0.6, fz, 1.1, 3.4, PALETTE.frond, 5);
+  // --- park: lawn, trees, benches -----------------------------------
+  parts.push(quadGeo(28, 28, [0.35, 0.65, 0.3], 0.03, [0, 0, 0]));
+  for (let i = 0; i < CFG.treeCount; i += 1) {
+    const x = rng.range(-140, 140);
+    const z = rng.range(-140, 140);
+    if (Math.abs(x % CFG.blockSize) < 7 || Math.abs(z % CFG.blockSize) < 7) continue;
+    parts.push(cylGeo(0.3, 0.4, 3, 6, TRUNK, [x, 1.5, z]));
+    parts.push(boxGeo(3.5, 3.5, 3.5, LEAF, [x, 4.5, z]));
+  }
+
+  // --- port cranes + containers (south-east) ------------------------
+  function crane(x, z) {
+    parts.push(boxGeo(2, 22, 2, [0.9, 0.55, 0.2], [x - 5, 11, z]));
+    parts.push(boxGeo(2, 22, 2, [0.9, 0.55, 0.2], [x + 5, 11, z]));
+    parts.push(boxGeo(16, 2, 2, [0.9, 0.55, 0.2], [x, 22, z]));
+    parts.push(boxGeo(1, 6, 1, [0.3, 0.3, 0.3], [x + 4, 18, z]));
+    parts.push(boxGeo(4, 2.5, 2.5, [0.2, 0.5, 0.8], [x + 4, 13.5, z]));
+  }
+  crane(128, 128);
+  crane(128, 96);
+  const containerColors = [[0.8, 0.3, 0.2], [0.2, 0.5, 0.8], [0.3, 0.7, 0.4], [0.9, 0.7, 0.2]];
+  for (let i = 0; i < 14; i += 1) {
+    parts.push(boxGeo(6, 2.6, 2.6, rng.pick(containerColors), [
+      104 + (i % 4) * 8, 1.3 + Math.floor(i / 8) * 2.7, 108 + Math.floor(i / 4) * 6,
+    ]));
+  }
+
+  // --- marina docks (south-west shore) ------------------------------
+  for (let i = 0; i < 3; i += 1) {
+    parts.push(boxGeo(16, 0.5, 2.5, [0.6, 0.45, 0.3], [-158, 0.4, 64 + i * 16]));
+  }
+
+  // --- streetlights along the main roads ----------------------------
+  for (const x of lines) {
+    for (let z = -128; z <= 128; z += 64) {
+      parts.push(cylGeo(0.15, 0.2, 7, 5, [0.3, 0.3, 0.32], [x + 6, 3.5, z]));
+      parts.push(boxGeo(1.6, 0.3, 0.5, [1.0, 0.95, 0.7], [x + 5.2, 7, z]));
     }
-    lit.cone(topX, h + 1.4, z, 1.6, 2.6, PALETTE.frond, 6);
-    this.palms.push([x, z]);
   }
 
-  finish(gl) {
-    this.litMesh = this.litBuilder.finish(gl);
-    this.plainMesh = this.plainBuilder.finish(gl);
-    this.litBuilder = null;
-    this.plainBuilder = null;
-  }
+  // --- garage building (player's shop, on the 0-line road) ----------
+  const garagePos = [16, 0, 32];
+  parts.push(boxGeo(18, 8, 14, [0.85, 0.3, 0.3], [garagePos[0], 4, garagePos[2]]));
+  parts.push(boxGeo(18.4, 1.5, 14.4, [1.0, 0.8, 0.2], [garagePos[0], 7.5, garagePos[2]]));
+  parts.push(boxGeo(10, 5, 0.5, [0.2, 0.2, 0.25], [garagePos[0], 2.5, garagePos[2] - 7.2]));
+  colliders.push({
+    minX: garagePos[0] - 9, maxX: garagePos[0] + 9,
+    minZ: garagePos[2] - 7, maxZ: garagePos[2] + 7,
+  });
 
-  // Push a walker out of building footprints (cheap AABB resolve).
-  collide(x, z, radius) {
-    for (const b of this.buildings) {
-      const dx = x - b.x;
-      const dz = z - b.z;
-      const px = b.w / 2 + radius - Math.abs(dx);
-      const pz = b.d / 2 + radius - Math.abs(dz);
-      if (px > 0 && pz > 0) {
-        if (px < pz) x = b.x + (dx > 0 ? b.w / 2 + radius : -b.w / 2 - radius);
-        else z = b.z + (dz > 0 ? b.d / 2 + radius : -b.d / 2 - radius);
+  return {
+    mesh: makeMesh(ctx, mergeGeos(parts)),
+    colliders,
+    garagePos,
+    raceStart: [0, 0, -64],
+    dockPos: [-158, 0, 80],
+    heliPad: [96, 0, -96],
+    // Talkable NPC spots: pier, park, garage, marina, downtown, beach.
+    npcSpots: [
+      [-140, 0, -96], [8, 0, 8], [24, 0, 24],
+      [-150, 0, 64], [32, 0, -32], [-144, 0, 120],
+    ],
+  };
+}
+
+// Push a circle (x, z, radius) out of every collider it overlaps.
+// Returns the corrected [x, z]. Cheap AABB resolution, good enough
+// for arcade driving and walking.
+export function resolveCollisions(colliders, x, z, radius) {
+  let nx = x;
+  let nz = z;
+  for (const c of colliders) {
+    const cx = Math.max(c.minX, Math.min(nx, c.maxX));
+    const cz = Math.max(c.minZ, Math.min(nz, c.maxZ));
+    const dx = nx - cx;
+    const dz = nz - cz;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < radius * radius) {
+      if (d2 > 0.0001) {
+        const d = Math.sqrt(d2);
+        nx = cx + (dx / d) * radius;
+        nz = cz + (dz / d) * radius;
+      } else {
+        // Centre inside the box: shove out along the smallest overlap.
+        const pushL = nx - (c.minX - radius);
+        const pushR = (c.maxX + radius) - nx;
+        const pushU = nz - (c.minZ - radius);
+        const pushD = (c.maxZ + radius) - nz;
+        const m = Math.min(pushL, pushR, pushU, pushD);
+        if (m === pushL) nx = c.minX - radius;
+        else if (m === pushR) nx = c.maxX + radius;
+        else if (m === pushU) nz = c.minZ - radius;
+        else nz = c.maxZ + radius;
       }
     }
-    return [x, z];
   }
-
-  insideBuilding(x, z) {
-    for (const b of this.buildings) {
-      if (Math.abs(x - b.x) < b.w / 2 + 1 && Math.abs(z - b.z) < b.d / 2 + 1) return true;
-    }
-    return false;
-  }
+  return [nx, nz];
 }

@@ -1,43 +1,108 @@
-# gta6-01
+# Solmar Bay — Sun, Sand & Sirens
 
-[![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
-[![rank](https://make.fun/badge/gta6-01/dikawibowo2001-lab/gta6-01/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
-[![reward](https://make.fun/badge/gta6-01/dikawibowo2001-lab/gta6-01/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+A 3D open-world crime game in the spirit of GTA 6, built from scratch
+in raw WebGL for the make.fun **gta6-01** bounty. No game engine, no
+libraries, no network: plain static files that run offline in a
+desktop browser.
 
-**Solmar Bay — Sun, Sand & Sirens** is an original open-world crime game in full 3D, built for make.fun's "Make GTA 6" bounty. Mara Vega, getaway driver for The Harbor Crew, runs twelve story jobs across a sun-soaked coastal city at golden hour — stealing cars, outrunning the SBPD, and facing down the Coral Kings — while the whole city watches from the sidewalks.
+Mara Vega comes home to Solmar Bay, a sun-soaked coastal city where
+the Harbor Crew is losing ground to the Coral Kings. Twelve story
+jobs, a living city, and the full weight of the Solmar Bay Police
+Department stand between her and the top of the food chain.
 
-Everything is original: the city, the characters, the story, the art, and the engine. The game is raw WebGL written from scratch (own matrix math, shaders and meshes — no third-party libraries), and it plays entirely offline from static files.
-
-## What's in the city
-
-- **A living 3D world**: ~100 buildings with lit windows, glass downtown towers with rooftop props, palm-lined beach and ocean, a working port with cranes and container stacks, a marina with moored boats, streetlights, neon signs, fog and a golden-hour sky with a low sun.
-- **Three cameras**: a slow downtown orbit on the title screen, a chase cam behind the car, and an over-shoulder cam on foot.
-- **Twelve story missions** with stages, timers and dialogue from Reyes and Juno — car theft, timed deliveries, a harbor rescue, a convoy hit, a port heist, two survive-the-heat finales up to 5 stars, a multi-stage heist finale, a street-race mission, a rescue from a police cordon, and a turf war for Downtown.
-- **Six stealable car types** (sports, sedan, SUV, taxi, truck, police) with arcade handling, damage, smoke and fire — plus **burning wrecks**: destroyed cars burn on a fuse, then explode (damage radius, screen shake) and stay as charred husks.
-- **A full wanted system**: 1–5 stars, chasing and ramming cruisers, foot cops from 2 stars, a **police helicopter with a visible spotlight** from 3 stars, roadblocks from 4 stars, heat decay, and a busted screen with a fine.
-- **Combat**: fists, pistol, SMG, shotgun (6-pellet spread) and rifle, each with its own damage, fire rate, spread and tracer colour — plus a radial **weapon wheel** (hold Q / Tab, or keys 1–4).
-- **Procedural radio**: three WebAudio stations (surf rock, synthwave, talk radio) with named tracks, switchable with R or the HUD button — no audio files.
-- **Reyes' garage**: spend mission cash on engine, armour, nitro boost and paint jobs; upgrades follow Mara between cars and persist in the save.
-- **Street races**: checkpoint races against 3 AI rivals, 3-2-1-GO countdown, live position, cash prizes, and a race mission.
-- **Respect & turf**: five respect ranks (Nobody → Street Boss) that unlock the big jobs, and district standing for Harbor, Downtown and Beachfront, shown on the pause screen.
-- **Crew abilities**: call a backup driver, send a distraction decoy, or drop a wanted star — keys 5/6/7 or HUD buttons, each with a cooldown.
-- **Talkable NPCs**: six named locals with scripted lines, tips and mission hints (press E).
-- **Boats**: three drivable speedboats at the marina, with wakes and a boat chase cam.
-- **Dense GTA-style HUD**: mission panel with stage and next-step hint, live SBPD dispatch list, weapon slots, cash, clock, wanted stars, rank and XP bar, respect line, radio ticker, round live minimap (garage, race, NPC, boat and checkpoint markers), district label, health/armour bars, and a speedometer with vehicle condition and nitro gauge.
-- **Extras**: 20 AI traffic cars, 40 fleeing pedestrians, health/armour/cash pickups, localStorage save, and synthesized WebAudio SFX with an ambient loop — zero network requests.
-
-## Controls
-
-WASD drive & walk · E enter / talk / board · Mouse aim · Click shoot · R radio · F reload · 1–4 weapons · 0 fists · Q / Tab weapon wheel · 5/6/7 crew · G garage · J job / race · Space handbrake · Shift sprint / nitro · P pause · H help
-
-## Run it
+## Play
 
 ```sh
 node serve.ts
+# open http://localhost:8080
 ```
 
-Then open http://localhost:8080 — no build step, no install, no network.
+| Key | Action |
+| --- | ------ |
+| WASD / arrows | Walk / drive |
+| Shift | Sprint / nitro (with the Nitro Kit) |
+| F | Enter / exit car |
+| E | Talk, board a boat, start a mission or race |
+| Mouse click / J | Shoot |
+| Q (hold) / Tab | Weapon wheel |
+| 1–5 | Select weapon |
+| R | Next radio station |
+| G | Garage shop (near Reyes' Garage) |
+| 6 / 7 / 8 | Crew abilities: Rico backup, Lena decoy, Ghost getaway |
+| Space | Brake / handbrake |
+| P / Esc | Pause — ranks, turf, mission list |
+| M | Mute |
 
----
+## What is in the game
 
-<sub>Entered on [make.fun](https://make.fun/?ref=n305kcfc&utm_source=github&utm_medium=readme&utm_campaign=gta6-01) · AI agents build software for cash rewards</sub>
+- **A real 3D city**: 118 seeded buildings with neon signs, a park,
+  a working port with cranes and containers, a marina, a beach and
+  an ocean you can boat on — golden-hour light and distance fog.
+- **Driving**: arcade handling with drift, traffic that follows the
+  road grid, parked cars to steal, collisions and car damage.
+- **Police**: a 1–5 star wanted system — ramming cruisers, foot cops
+  from 2 stars, the CONDOR-1 helicopter with a spotlight from 3,
+  roadblocks from 4. Lay low and the heat bleeds off.
+- **Combat**: five weapons on a radial wheel (fists, pistol, SMG,
+  shotgun, rifle), hitscan shooting with tracers, health and armor
+  pickups, burning cars that explode.
+- **Twelve story missions**: car theft, gang hits, timed driving, a
+  5-star heist finale, a street race, a rescue and a turf war —
+  gated by respect rank, paying cash and respect.
+- **Systems**: three procedural radio stations, a garage upgrade
+  shop (engine, armor, nitro, paint), checkpoint street races
+  against three AI rivals, five respect ranks, district turf
+  meters, three crew abilities with cooldowns, six talkable NPCs
+  and drivable speedboats.
+- **Presentation**: dense GTA-style HUD with a live minimap, mission
+  beacons, dialogue bubbles, toasts, and automatic saving to
+  localStorage.
+
+## Structure
+
+```
+main.ts            entry point: stages game/ + screenshots/ and writes dossier.json
+serve.ts           tiny static server for local play (kit file, untouched)
+vendor/            make.fun helper (kit file, untouched)
+game/
+  index.html       canvas + HUD DOM + CSS
+  src/
+    main.js        boot, game loop, save/load, on-foot movement
+    config.js      tuning + palette + districts + ranks
+    random.js      seeded PRNG (splitmix32)
+    math3.js       vec3 + column-major mat4
+    gl.js          WebGL program, geometry builders, mesh drawing
+    audio.js       procedural WebAudio SFX
+    radio.js       three generative radio stations
+    input.js       keyboard + mouse
+    world.js       terrain, roads, beach, ocean
+    city.js        buildings, palms, port, marina, colliders
+    entities.js    car / pedestrian / helicopter / boat drawing
+    vehicles.js    arcade car physics, enter/exit
+    traffic.js     road traffic AI + pedestrians
+    police.js      wanted system, cruisers, foot cops, helicopter, roadblocks
+    combat.js      shooting, damage, death, pickups
+    weapons.js     the five-weapon arsenal + wheel state
+    particles.js   smoke, fire, sparks, tracers, wake
+    wrecks.js      burning cars, explosions, husks
+    boats.js       speedboats
+    missions.js    twelve data-driven story missions
+    races.js       checkpoint street races
+    garage.js      upgrade shop logic
+    progression.js respect ranks + district turf
+    crew.js        backup / decoy / getaway abilities
+    npcs.js        six talkable locals
+    hud.js         HUD, minimap, wheel, garage UI, pause screen
+    render.js      chase camera + draw pass
+    shots.js       ?shot= staging for the four screenshots
+```
+
+## Screenshots
+
+Four staged captures live in `screenshots/`: the title screen, a
+drive with the weapon wheel open, a 4-star helicopter chase, and
+the open garage shop. Regenerate them with the `?shot=` parameter,
+e.g. `http://localhost:8080/?shot=chase`.
+
+Everything in Solmar Bay — the city, the characters, the story, the
+art — is original work made for this entry.

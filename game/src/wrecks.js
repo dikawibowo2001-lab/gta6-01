@@ -1,103 +1,79 @@
-// Burning wrecks: when a car's condition hits zero it doesn't just
-// stop — it catches fire. Flames and smoke pour out for four seconds
-// (the fuse), then the tank goes up: a fireball, flying sparks, a
-// damage radius that hurts Mara and nearby cars, and a screen shake.
-// What remains is a charred husk that stays in the world. The fuse
-// gives Mara time to run — or to use the blast on the cops chasing
-// her.
+// Solmar Bay v4 — burning wrecks.
+//
+// A car whose health drops below 30 starts burning: fire and smoke
+// pour out of the hood for four seconds, then the tank goes up — a
+// blast that hurts anything nearby and shakes the camera. What is
+// left is a charred husk that stays in the world as a reminder.
 
-import { dist2D } from './math3.js';
+import { v3DistXZ } from './math3.js';
 
-const FUSE = 4; // seconds of burning before the explosion
-const BLAST_RADIUS = 14;
-const BLAST_DAMAGE = 55;
+export function makeWrecks(G) {
+  const burning = new Map(); // car -> seconds left on the fuse
 
-export class Wrecks {
-  constructor() {
-    this.explosions = 0;
+  function ignite(car) {
+    if (car.burnt || burning.has(car)) return;
+    car.burning = true;
+    burning.set(car, 4);
+    G.audio.play('crash');
   }
 
-  // All cars in the world, from every list, de-duplicated by id.
-  allCars(world) {
-    const seen = new Set();
-    const out = [];
-    const lists = [
-      world.traffic.cars,
-      world.parked,
-      world.police.cruisers,
-      world.rivalCars,
-      world.raceCars,
-      world.crewCars,
-    ];
-    if (world.player.car) lists.push([world.player.car]);
-    for (const list of lists) {
-      for (const c of list) {
-        if (c && !seen.has(c.id)) {
-          seen.add(c.id);
-          out.push(c);
+  function explode(car) {
+    burning.delete(car);
+    car.burning = false;
+    car.burnt = true;
+    car.dead = true;
+    car.speed = 0;
+    G.audio.play('explosion');
+    G.shake = 0.7;
+    const at = [car.pos[0], 1, car.pos[2]];
+    for (let i = 0; i < 14; i += 1) G.particles.spawn('fire', at);
+    for (let i = 0; i < 10; i += 1) G.particles.spawn('smoke', at);
+    G.particles.spawn('impact', at);
+    // Blast radius: 14 metres, 55 damage at the centre.
+    const hurt = (pos, amount) => {
+      const d = v3DistXZ(car.pos, pos);
+      if (d < 14) return amount * (1 - d / 14);
+      return 0;
+    };
+    const playerDmg = hurt(G.player.pos, 55);
+    if (playerDmg > 1) G.combat.damagePlayer(playerDmg);
+    for (const other of G.cars) {
+      if (other === car || other.dead) continue;
+      const dmg = hurt(other.pos, 55);
+      if (dmg > 1) G.vehicles.damageCar(other, dmg);
+    }
+    for (const ped of G.peds) {
+      if (!ped.dead && hurt(ped.pos, 55) > 25) G.combat.killPed(ped);
+    }
+    for (const cop of G.police.footCops) {
+      if (!cop.dead) {
+        const dmg = hurt(cop.pos, 55);
+        if (dmg > 1) G.combat.damageCop(cop, dmg);
+      }
+    }
+    // If the player was driving it, they are out on foot now.
+    if (G.player.car === car) {
+      G.player.car = null;
+      G.player.onFoot = true;
+      G.player.pos = [car.pos[0] + 3, 0, car.pos[2] + 3];
+    }
+  }
+
+  return {
+    ignite,
+    update(dt) {
+      for (const [car, fuse] of [...burning.entries()]) {
+        const left = fuse - dt;
+        // Fire and smoke while the fuse burns down.
+        const at = [car.pos[0], 1.2, car.pos[2]];
+        if (G.rng.chance(dt * 22)) G.particles.spawn('fire', at);
+        if (G.rng.chance(dt * 10)) G.particles.spawn('smoke', at);
+        if (left <= 0) {
+          explode(car);
+        } else {
+          burning.set(car, left);
         }
       }
-    }
-    return out;
-  }
-
-  update(dt, world, renderer) {
-    for (const car of this.allCars(world)) {
-      if (car.wreckState === 'burning') {
-        car.wreckT += dt;
-        // Flames + smoke while the fuse burns.
-        if (Math.random() < 0.8) world.particles.fire(car.x, 1.2, car.z);
-        if (Math.random() < 0.6) world.particles.smoke(car.x, 1.8, car.z);
-        if (car.wreckT >= FUSE) {
-          this.explode(car, world, renderer);
-        }
-      }
-    }
-  }
-
-  explode(car, world, renderer) {
-    car.wreckState = 'husk';
-    car.exploded = true;
-    this.explosions += 1;
-    world.particles.explosion(car.x, 1, car.z);
-    world.audio.explosion();
-    if (renderer) renderer.shake = Math.min(1, renderer.shake + 0.8);
-    // Damage radius: Mara, nearby cars, nearby walkers.
-    const p = world.player;
-    const dp = dist2D(car.x, car.z, p.x, p.z);
-    if (dp < BLAST_RADIUS) {
-      const frac = 1 - dp / BLAST_RADIUS;
-      if (p.inCar && p.car && p.car !== car) {
-        p.car.damage(BLAST_DAMAGE * frac);
-      } else if (!p.inCar) {
-        p.damage(BLAST_DAMAGE * frac);
-      }
-    }
-    for (const other of this.allCars(world)) {
-      if (other === car || other.wreckState !== 'ok') continue;
-      const d = dist2D(car.x, car.z, other.x, other.z);
-      if (d < BLAST_RADIUS) {
-        other.damage(BLAST_DAMAGE * (1 - d / BLAST_RADIUS));
-      }
-    }
-    for (const ped of world.peds) {
-      if (!ped.alive) continue;
-      if (dist2D(car.x, car.z, ped.x, ped.z) < BLAST_RADIUS * 0.7) {
-        ped.damage(100);
-      }
-    }
-    for (const cop of world.police.cops) {
-      if (!cop.alive) continue;
-      if (dist2D(car.x, car.z, cop.x, cop.z) < BLAST_RADIUS * 0.7) {
-        cop.damage(100);
-      }
-    }
-    for (const r of world.rivals) {
-      if (!r.alive) continue;
-      if (dist2D(car.x, car.z, r.x, r.z) < BLAST_RADIUS * 0.7) {
-        const died = r.damage(100);
-        if (died) world.missions.kills += 1;
-      }
-    }
-  }
+    },
+  };
 }

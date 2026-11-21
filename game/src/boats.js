@@ -1,84 +1,106 @@
-// Boats: three speedboats moored at the marina. Walk to the dock,
-// press E to board, and steer on the open water with the same WASD
-// controls — boats turn slower and drift wider than cars, and leave a
-// foam wake behind them. Press E again to step back onto the dock.
-// Boats can't drive on land: the water is everything east of the
-// surf line, and the dock is the only way in and out.
+// Solmar Bay v4 — speedboats.
+//
+// Three boats bob at the marina docks. Walk up to one and press E
+// to climb aboard; the boat handles like a car with more slide, and
+// throws a white wake behind it. Boats stay on the water — steer
+// back to a dock and press E again to step ashore.
 
-import { WORLD } from './config.js';
-import { clamp, dist2D } from './math3.js';
+import { CFG } from './config.js';
+import { clamp, v3DistXZ } from './math3.js';
 
-export class Boat {
-  constructor(x, z, heading, color) {
-    this.x = x;
-    this.z = z;
-    this.heading = heading;
-    this.speed = 0;
-    this.color = color;
-    this.occupied = false;
-    this.wakeT = 0;
-  }
+const BOAT_COLORS = [
+  [0.9, 0.9, 0.95], [0.2, 0.6, 0.9], [0.9, 0.3, 0.2],
+];
 
-  get top() {
-    return 30;
-  }
+export function makeBoats(G) {
+  const boats = [];
 
-  // Boat handling: slow to turn, long to stop, drifts on the swell.
-  drive(throttle, steering, dt) {
-    this.speed += throttle * 9 * dt;
-    this.speed = clamp(this.speed, -6, this.top);
-    this.speed -= Math.sign(this.speed) * Math.min(Math.abs(this.speed), 1.2 * dt);
-    const turnRate = 1.1 * clamp(Math.abs(this.speed) / 10, 0.2, 1);
-    this.heading += steering * turnRate * dt * (this.speed < 0 ? -1 : 1);
-    this.x += Math.sin(this.heading) * this.speed * dt;
-    this.z += Math.cos(this.heading) * this.speed * dt;
-    // Stay in the water: the surf line is the western edge, the world
-    // bound the rest.
-    const minX = WORLD.seaX - 6;
-    if (this.x < minX) {
-      this.x = minX;
-      this.speed *= 0.4;
+  function spawnBoats() {
+    const dock = G.city.dockPos;
+    for (let i = 0; i < 3; i += 1) {
+      boats.push({
+        pos: [dock[0] - 6 - i * 3, 0, dock[2] + i * 12],
+        angle: Math.PI / 2,
+        speed: 0,
+        color: BOAT_COLORS[i],
+        driver: 'none',
+        bobPhase: G.rng.range(0, 6),
+      });
     }
-    const B = WORLD.bound + 60;
-    this.x = clamp(this.x, minX, B);
-    this.z = clamp(this.z, -B, B);
-  }
-}
-
-export class Boats {
-  constructor() {
-    this.list = [
-      new Boat(404, 280, Math.PI, [0.9, 0.9, 0.92]),
-      new Boat(404, 300, Math.PI, [0.2, 0.5, 0.8]),
-      new Boat(404, 320, Math.PI, [0.8, 0.3, 0.2]),
-    ];
   }
 
-  nearest(x, z, maxDist = 6) {
+  function nearestBoat(pos, maxDist) {
     let best = null;
     let bestD = maxDist;
-    for (const b of this.list) {
-      const d = dist2D(x, z, b.x, b.z);
+    for (const b of boats) {
+      const d = v3DistXZ(pos, b.pos);
       if (d < bestD) {
-        bestD = d;
         best = b;
+        bestD = d;
       }
     }
     return best;
   }
 
-  update(dt, world) {
-    for (const b of this.list) {
-      if (b.occupied) {
-        b.wakeT -= dt;
-        if (Math.abs(b.speed) > 4 && b.wakeT <= 0) {
-          b.wakeT = 0.12;
-          world.particles.wake(b.x - Math.sin(b.heading) * 3, b.z - Math.cos(b.heading) * 3);
-        }
-      } else {
-        // Moored boats bob gently on the swell.
-        b.speed = 0;
-      }
-    }
+  function board(boat) {
+    const p = G.player;
+    p.boat = boat;
+    boat.driver = 'player';
+    p.onFoot = false;
+    p.pos = [boat.pos[0], 0, boat.pos[2]];
+    p.angle = boat.angle;
+    G.audio.play('click');
+    G.hud.toast('Naik perahu — W gas, A/D belok, E turun');
   }
+
+  function disembark() {
+    const p = G.player;
+    if (!p.boat) return;
+    const boat = p.boat;
+    boat.driver = 'none';
+    boat.speed = 0;
+    p.boat = null;
+    p.onFoot = true;
+    // Step onto the nearest shore: east if close to land, else the dock.
+    p.pos = [Math.max(boat.pos[0] + 4, CFG.oceanX + 8), 0, boat.pos[2]];
+    G.audio.play('click');
+  }
+
+  return {
+    boats,
+    spawnBoats,
+    nearestBoat,
+    board,
+    disembark,
+    update(dt) {
+      const p = G.player;
+      if (p.boat) {
+        const boat = p.boat;
+        const input = G.input;
+        boat.speed += input.throttle * 10 * dt;
+        boat.speed -= boat.speed * 0.5 * dt;
+        boat.speed = clamp(boat.speed, -6, 30);
+        if (Math.abs(boat.speed) > 0.5) {
+          boat.angle += input.steer * 1.4 * dt * Math.sign(boat.speed);
+        }
+        boat.pos[0] += -Math.sin(boat.angle) * boat.speed * dt;
+        boat.pos[2] += -Math.cos(boat.angle) * boat.speed * dt;
+        // Stay on the water.
+        boat.pos[0] = clamp(boat.pos[0], -280, CFG.oceanX + 4);
+        boat.pos[2] = clamp(boat.pos[2], -190, 190);
+        if (Math.abs(boat.speed) > 5 && G.rng.chance(dt * 20)) {
+          G.particles.spawn('wake', [boat.pos[0], 0.2, boat.pos[2]]);
+        }
+        if (input.wasPressed('KeyE')) disembark();
+      } else if (p.onFoot && G.input.wasPressed('KeyE')) {
+        const boat = nearestBoat(p.pos, 5);
+        if (boat) board(boat);
+      }
+      // Idle bobbing.
+      for (const b of boats) {
+        b.bobPhase += dt;
+        b.pos[1] = Math.sin(b.bobPhase * 1.4) * 0.15;
+      }
+    },
+  };
 }

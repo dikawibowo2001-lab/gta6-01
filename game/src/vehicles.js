@@ -1,202 +1,225 @@
-// Cars: arcade physics on the road grid — accelerate, brake, steer
-// with speed-sensitive grip, skid a little at speed, take damage and
-// smoke when hurt, burn and explode when wrecked. A car is driven by
-// the player, by traffic AI, by the police, by a race rival, or by
-// nobody (parked, waiting to be stolen).
+// Solmar Bay v4 — arcade car physics + enter/exit.
 //
-// GARAGE UPGRADES (v3): the player's car carries an engine level (top
-// speed), armour (max condition), a nitro tank (hold Shift for a
-// 45% top-speed boost while the tank lasts) and a paint job. The world
-// copies the saved upgrades onto whatever car Mara steals.
+// Cars are heading + speed: throttle accelerates along the heading,
+// steering turns the heading proportional to speed, and a grip term
+// bleeds off sideways slide. Collisions are circle-vs-AABB against
+// the city's colliders and soft circle-vs-circle between cars.
+// The player enters the nearest car with F and leaves the same way.
 
-import { clamp, damp, dist2D } from './math3.js';
-import { CAR_TYPES, WORLD } from './config.js';
-import { pick } from './random.js';
+import { CFG } from './config.js';
+import { clamp, v3DistXZ } from './math3.js';
+import { resolveCollisions } from './city.js';
+import { CAR_COLORS } from './entities.js';
 
-let nextId = 1;
-
-const ENGINE_TOP_MUL = [1, 1.12, 1.24, 1.4];
-const ARMOR_MAX_BONUS = [0, 40, 80, 140];
-
-export class Car {
-  constructor(type, color, x, z, heading) {
-    this.id = nextId++;
-    this.type = type;
-    this.spec = CAR_TYPES[type];
-    this.name = this.spec.name;
-    this.color = color;
-    this.x = x;
-    this.z = z;
-    this.heading = heading;
-    this.speed = 0; // signed, units/sec, forward positive
-    this.steer = 0; // -1..1, smoothed
-    this.condition = 100;
-    this.driver = null; // null = parked, 'player', 'traffic', 'police', 'rival', 'race', 'crew'
-    this.callsign = null;
-    this.role = null;
-    this.sirenPhase = Math.random() * Math.PI * 2;
-    this.brakeLights = false;
-    this.handbrake = false;
-    this.dead = false;
-    this.wrecked = false;
-    // Wreck lifecycle (wrecks.js): 'ok' | 'burning' | 'husk'.
-    this.wreckState = 'ok';
-    this.wreckT = 0;
-    this.exploded = false;
-    // Garage upgrades (player's car only).
-    this.engineLevel = 0;
-    this.armorLevel = 0;
-    this.hasNitro = false;
-    this.nitroFuel = 100;
-    this.nitroActive = false;
-    // Traffic-AI state.
-    this.route = null;
-    this.routeIdx = 0;
-    this.waitTimer = 0;
-  }
-
-  get maxCondition() {
-    return 100 + ARMOR_MAX_BONUS[this.armorLevel || 0];
-  }
-
-  get top() {
-    let t = this.spec.top * ENGINE_TOP_MUL[this.engineLevel || 0];
-    if (this.nitroActive) t *= 1.45;
-    if (this.condition < 35) t *= 0.6;
-    return t;
-  }
-
-  damage(amount) {
-    this.condition -= amount;
-    if (this.condition <= 0) {
-      this.condition = 0;
-      this.wrecked = true;
-      this.speed = 0;
-      // The wreck starts burning; wrecks.js runs the fuse.
-      if (this.wreckState === 'ok') {
-        this.wreckState = 'burning';
-        this.wreckT = 0;
-      }
-    }
-    return this.wrecked;
-  }
-
-  get smoking() {
-    return this.condition < 45 && !this.wrecked;
-  }
-
-  get burning() {
-    return this.condition < 18 && !this.wrecked;
-  }
-
-  // Apply saved garage upgrades to this car (called when Mara steals
-  // a car, so her upgrades follow her, not the vehicle).
-  applyUpgrades(up) {
-    if (!up) return;
-    this.engineLevel = up.engine || 0;
-    this.armorLevel = up.armor || 0;
-    this.hasNitro = !!up.nitro;
-    if (up.paint) this.color = up.paint.slice();
-    this.condition = this.maxCondition;
-  }
-
-  // Drive with throttle (-1 reverse .. 1 full), steering (-1..1), a
-  // handbrake flag and an optional nitro flag. Arcade model: heading
-  // follows steering faster at speed, grip bleeds off in a handbrake
-  // slide, nitro trades tank fuel for acceleration and top speed.
-  drive(throttle, steering, handbrake, dt, nitro = false) {
-    if (this.wrecked) return;
-    const spec = this.spec;
-    this.steer = damp(this.steer, steering, 8, dt);
-    this.handbrake = handbrake;
-    // Nitro: only while the tank has fuel and the car is accelerating.
-    const wantNitro = nitro && this.hasNitro && throttle > 0 && this.nitroFuel > 0;
-    this.nitroActive = wantNitro;
-    if (wantNitro) {
-      this.nitroFuel = Math.max(0, this.nitroFuel - 28 * dt);
-    } else {
-      this.nitroFuel = Math.min(100, this.nitroFuel + 7 * dt);
-    }
-    const grip = handbrake ? spec.grip * 0.45 : spec.grip;
-    const spd = Math.abs(this.speed);
-    const turnRate = grip * clamp(spd / 10, 0.25, 1);
-    this.heading += this.steer * turnRate * dt * (this.speed < 0 ? -1 : 1);
-    if (throttle > 0) {
-      this.speed += spec.accel * throttle * (this.nitroActive ? 1.8 : 1) * dt;
-      this.brakeLights = false;
-    } else if (throttle < 0) {
-      if (this.speed > 0.5) {
-        this.speed -= spec.brake * dt;
-        this.brakeLights = true;
-      } else {
-        this.speed += spec.accel * 0.45 * throttle * dt; // reverse
-        this.brakeLights = false;
-      }
-    } else {
-      this.speed = damp(this.speed, 0, 0.6, dt);
-      this.brakeLights = false;
-    }
-    if (handbrake) {
-      this.speed = damp(this.speed, 0, 2.2, dt);
-    }
-    this.speed = clamp(this.speed, -spec.top * 0.4, this.top);
-    this.x += Math.sin(this.heading) * this.speed * dt;
-    this.z += Math.cos(this.heading) * this.speed * dt;
-    // Soft world bounds: the city edge pushes back.
-    const B = WORLD.bound;
-    if (Math.abs(this.x) > B) {
-      this.x = Math.sign(this.x) * B;
-      this.speed *= 0.4;
-    }
-    if (Math.abs(this.z) > B) {
-      this.z = Math.sign(this.z) * B;
-      this.speed *= 0.4;
-    }
-  }
-
-  // Simple circle collision with another car: both take a little damage
-  // and bounce apart.
-  collideWith(other) {
-    const d = dist2D(this.x, this.z, other.x, other.z);
-    const min = this.type === 'truck' ? 5.2 : 4.2;
-    if (d > min || d === 0) return false;
-    const nx = (this.x - other.x) / d;
-    const nz = (this.z - other.z) / d;
-    const push = (min - d) / 2 + 0.05;
-    this.x += nx * push;
-    this.z += nz * push;
-    other.x -= nx * push;
-    other.z -= nz * push;
-    const impact = Math.abs(this.speed - other.speed);
-    if (impact > 4) {
-      this.damage(impact * 0.55);
-      other.damage(impact * 0.55);
-      this.speed *= 0.55;
-      other.speed *= 0.55;
-    }
-    return true;
-  }
+export function makeCar(x, z, angle, opts = {}) {
+  return {
+    pos: [x, 0, z],
+    angle,
+    speed: 0,
+    color: opts.color || [0.8, 0.2, 0.2],
+    kind: opts.kind || 'sedan',
+    health: CFG.carHealth,
+    driver: opts.driver || 'none', // player | traffic | cop | none
+    nitro: 0,
+    burnt: false,
+    burning: false,
+    dead: false,
+    honkTimer: 0,
+  };
 }
 
-// Parked cars: a few beauties left around the city for Mara to steal,
-// including the hero sports car for mission one and the getaway car
-// for the heist finale.
-export function spawnParked(rng) {
-  const out = [];
-  const spots = [
-    ['sports', 120, 40, Math.PI / 2],
-    ['sedan', -40, 120, 0],
-    ['suv', 200, -120, Math.PI],
-    ['taxi', 40, -200, Math.PI / 2],
-    ['sedan', -200, 40, Math.PI / 2],
-    ['sports', 280, 200, 0],
-    ['truck', -280, -200, Math.PI / 2],
-    ['sedan', 120, 280, Math.PI],
-  ];
-  for (const [type, x, z, h] of spots) {
-    const c = new Car(type, pick(rng, CAR_TYPES[type].paint), x, z, h);
-    c.driver = null;
-    out.push(c);
+export function makeVehicles(G) {
+  function topSpeed(car) {
+    let top = CFG.carTopSpeed;
+    if (car.kind === 'sport') top *= 1.15;
+    if (car.kind === 'cop') top = CFG.copTopSpeed;
+    if (car === G.player.car) top *= 1 + 0.12 * G.garage.engineLevel;
+    if (car.nitro > 0) top *= 1.4;
+    return top;
   }
-  return out;
+
+  function drive(car, dt, throttle, steer) {
+    const top = topSpeed(car);
+    if (throttle > 0) car.speed += CFG.carAccel * throttle * dt;
+    else if (throttle < 0) {
+      car.speed += (car.speed > 0.5 ? -CFG.carBrake : CFG.carAccel * 0.5) * dt;
+    } else {
+      // Rolling drag.
+      car.speed -= car.speed * 0.6 * dt;
+    }
+    car.speed = clamp(car.speed, -10, top);
+    if (Math.abs(car.speed) > 0.2) {
+      const grip = CFG.carGrip * clamp(Math.abs(car.speed) / 12, 0.4, 1);
+      car.angle += steer * grip * dt * Math.sign(car.speed) * (1 - Math.abs(car.speed) / (top * 2.2));
+    }
+    if (car.nitro > 0) car.nitro = Math.max(0, car.nitro - dt);
+  }
+
+  function integrate(car, dt) {
+    const fx = -Math.sin(car.angle);
+    const fz = -Math.cos(car.angle);
+    car.pos[0] += fx * car.speed * dt;
+    car.pos[2] += fz * car.speed * dt;
+    // World bounds: bounce softly off the city edge.
+    const h = CFG.cityHalf + 30;
+    if (car.pos[0] < -h || car.pos[0] > h || car.pos[2] < -h || car.pos[2] > h) {
+      car.pos[0] = clamp(car.pos[0], -h, h);
+      car.pos[2] = clamp(car.pos[2], -h, h);
+      car.speed *= 0.4;
+    }
+    // Ocean edge: cars can't drive into the water.
+    if (car.pos[0] < CFG.oceanX + 6) {
+      car.pos[0] = CFG.oceanX + 6;
+      car.speed *= 0.3;
+    }
+    const [nx, nz] = resolveCollisions(G.city.colliders, car.pos[0], car.pos[2], 1.6);
+    if (nx !== car.pos[0] || nz !== car.pos[2]) {
+      if (Math.abs(car.speed) > 12) {
+        damageCar(car, Math.abs(car.speed) * 0.6);
+        G.audio.play('crash');
+      }
+      car.pos[0] = nx;
+      car.pos[2] = nz;
+      car.speed *= 0.45;
+    }
+  }
+
+  function damageCar(car, amount) {
+    if (car.dead) return;
+    const armor = car === G.player.car ? 1 - 0.15 * G.garage.armorLevel : 1;
+    car.health -= amount * armor;
+    if (car.health <= 30 && !car.burning && !car.burnt) {
+      G.wrecks.ignite(car);
+    }
+    if (car.health <= 0 && !car.dead) {
+      car.dead = true;
+      G.wrecks.ignite(car);
+    }
+  }
+
+  function nearestCar(pos, maxDist) {
+    let best = null;
+    let bestD = maxDist;
+    for (const car of G.cars) {
+      if (car.dead || car.burnt) continue;
+      const d = v3DistXZ(pos, car.pos);
+      if (d < bestD) {
+        best = car;
+        bestD = d;
+      }
+    }
+    return best;
+  }
+
+  function enterCar(car) {
+    const p = G.player;
+    p.car = car;
+    car.driver = 'player';
+    p.onFoot = false;
+    p.pos = [car.pos[0], 0, car.pos[2]];
+    p.angle = car.angle;
+    G.audio.play('click');
+    G.hud.toast('Mobil diambil — W gas, S rem, Spasi handbrake');
+  }
+
+  function exitCar() {
+    const p = G.player;
+    if (!p.car) return;
+    const car = p.car;
+    car.driver = 'none';
+    car.speed = 0;
+    p.car = null;
+    p.onFoot = true;
+    p.pos = [car.pos[0] + 2.5, 0, car.pos[2] + 1.5];
+    G.audio.play('click');
+  }
+
+  return {
+    topSpeed,
+    drive,
+    damageCar,
+    nearestCar,
+    enterCar,
+    exitCar,
+    spawnParked(count) {
+      const lines = [-128, -96, -64, -32, 0, 32, 64, 96, 128];
+      for (let i = 0; i < count; i += 1) {
+        const road = G.rng.pick(lines);
+        const along = G.rng.range(-140, 140);
+        const horizontal = G.rng.chance(0.5);
+        const x = horizontal ? along : road + 3.5;
+        const z = horizontal ? road + 3.5 : along;
+        const car = makeCar(x, z, horizontal ? Math.PI / 2 : 0, {
+          color: G.rng.pick(CAR_COLORS),
+          kind: G.rng.chance(0.15) ? 'sport' : 'sedan',
+        });
+        G.cars.push(car);
+      }
+    },
+    update(dt) {
+      const p = G.player;
+      // Player driving input.
+      if (p.car && !p.car.dead) {
+        const input = G.input;
+        let throttle = input.throttle;
+        if (input.brake) throttle = -1;
+        drive(p.car, dt, throttle, input.steer);
+        if (input.wasPressed('KeyF')) exitCar();
+        if (input.wasPressed('ShiftLeft') || input.wasPressed('ShiftRight')) {
+          if (G.garage.nitroOwned && p.car.nitro <= 0) {
+            p.car.nitro = 3;
+            G.audio.play('horn');
+          }
+        }
+      } else if (p.onFoot && G.input.wasPressed('KeyF')) {
+        const car = nearestCar(p.pos, 4.5);
+        if (car) {
+          if (car.driver === 'traffic') G.police.addWanted(1);
+          enterCar(car);
+        }
+      }
+      // Integrate every car.
+      for (const car of G.cars) {
+        if (car.dead || car.burnt) {
+          car.speed = 0;
+          continue;
+        }
+        integrate(car, dt);
+      }
+      // Soft car-vs-car separation.
+      for (let i = 0; i < G.cars.length; i += 1) {
+        for (let j = i + 1; j < G.cars.length; j += 1) {
+          const a = G.cars[i];
+          const b = G.cars[j];
+          if (a.dead || b.dead) continue;
+          const dx = b.pos[0] - a.pos[0];
+          const dz = b.pos[2] - a.pos[2];
+          const d = Math.hypot(dx, dz);
+          if (d > 0.01 && d < 3.2) {
+            const push = (3.2 - d) / 2;
+            const nx = dx / d;
+            const nz = dz / d;
+            a.pos[0] -= nx * push;
+            a.pos[2] -= nz * push;
+            b.pos[0] += nx * push;
+            b.pos[2] += nz * push;
+            const impact = Math.abs(a.speed - b.speed);
+            if (impact > 8) {
+              damageCar(a, impact * 0.4);
+              damageCar(b, impact * 0.4);
+              G.audio.play('crash');
+            }
+            a.speed *= 0.85;
+            b.speed *= 0.85;
+          }
+        }
+      }
+      // Engine hum follows the player's car.
+      if (p.car) {
+        G.audio.engine(Math.abs(p.car.speed) / CFG.carTopSpeed, true);
+      } else {
+        G.audio.engine(0, false);
+      }
+    },
+  };
 }
