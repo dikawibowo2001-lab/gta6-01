@@ -1,5 +1,0 @@
-# Local kit download and build output: never part of the submitted entry.
-gta6-01-kit/
-out/
-node_modules/
-.DS_Store
