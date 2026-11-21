@@ -1,7 +1,9 @@
-// Solmar Bay — Sun, Sand & Sirens (3D, v2.1)
+// Solmar Bay — Sun, Sand & Sirens (3D, v3)
 // One place for every number the game agrees on: the city grid, the
-// golden-hour palette, the six car types, the wanted ladder and the
-// economy. The modules import from here so the world stays consistent.
+// golden-hour palette, the six car types, the wanted ladder, the
+// economy, the radio stations, the garage catalogue, the race series,
+// the respect ladder, the crew abilities and the talkable NPCs. The
+// modules import from here so the world stays consistent.
 
 export const WORLD = {
   bound: 430, // soft edge of the playable city
@@ -82,6 +84,7 @@ export const ECONOMY = {
   startCash: 100,
   pickupCash: 50,
   finePerStar: 150,
+  racePrize: [500, 200, 100, 0], // by finishing position
 };
 
 export const DISTRICTS = [
@@ -102,6 +105,20 @@ export function districtAt(x, z) {
   return 'Solmar Bay';
 }
 
+// The three districts the crew fights over (progression standing).
+export const TURF_DISTRICTS = [
+  { id: 'harbor', name: 'Harbor', x0: -430, z0: -430, x1: 200, z1: -160 },
+  { id: 'downtown', name: 'Downtown', x0: -160, z0: -160, x1: 200, z1: 200 },
+  { id: 'beachfront', name: 'Beachfront', x0: 200, z0: -430, x1: 430, z1: 430 },
+];
+
+export function turfAt(x, z) {
+  for (const d of TURF_DISTRICTS) {
+    if (x >= d.x0 && x < d.x1 && z >= d.z0 && z < d.z1) return d.id;
+  }
+  return null;
+}
+
 // SBPD callsigns for the dispatch panel.
 export const CALLSIGNS = [
   'KITE-1', 'MARLIN-3', 'CORAL-48', 'CORAL-85', 'CORAL-43', 'SIERRA-12',
@@ -109,12 +126,115 @@ export const CALLSIGNS = [
   'VIPER-9', 'HAMMER-4', 'FALCON-2', 'ORCA-6', 'HAWK-21', 'REBEL-8',
 ];
 
-export const RADIO = [
-  { name: 'SOLMAR 98.4', track: 'Island Pop — Marisol Reyes' },
-  { name: 'CELESTE 98.1', track: 'Malecon Mirage — Vela Roja' },
-  { name: 'KUMALA FM', track: 'Neon Palms — The Drifters' },
-  { name: 'HARBOR ROCK', track: 'Harbor Lights — Coral Kings' },
+// Three procedural radio stations — each with its own genre, tracks and
+// a WebAudio recipe (see radio.js). No audio files anywhere.
+export const RADIO_STATIONS = [
+  {
+    id: 'surf',
+    name: 'SOLMAR SURF 98.4',
+    genre: 'Surf rock',
+    tracks: ['Pipeline Sunset — The Breakers', 'Wax & Neon — Marisol Reyes', 'Tide Chaser — Los Olas'],
+  },
+  {
+    id: 'synth',
+    name: 'NEON 101.7',
+    genre: 'Synthwave',
+    tracks: ['Midnight Overpass — Vela Roja', 'Chrome Palms — The Drifters', 'Afterglow Drive — Neon Marlin'],
+  },
+  {
+    id: 'talk',
+    name: 'HARBOR TALK 88.1',
+    genre: 'Talk radio',
+    tracks: ['The Dockside Hour — with Sal Vega', 'Solmar Tonight — call-in show', 'Harbor News — traffic & tides'],
+  },
 ];
+
+// Garage catalogue: engine and armour in 3 levels, nitro as a single
+// unlock, and five paint jobs. Prices in dollars.
+export const GARAGE = {
+  engine: [
+    { level: 1, name: 'Sport intake', price: 300, topBonus: 0.12 },
+    { level: 2, name: 'Turbo kit', price: 600, topBonus: 0.24 },
+    { level: 3, name: 'Twin-turbo V8', price: 1000, topBonus: 0.4 },
+  ],
+  armor: [
+    { level: 1, name: 'Reinforced frame', price: 250, hpBonus: 40 },
+    { level: 2, name: 'Plated panels', price: 500, hpBonus: 80 },
+    { level: 3, name: 'Full roll cage', price: 900, hpBonus: 140 },
+  ],
+  nitro: { name: 'Nitro boost (hold Shift)', price: 400 },
+  paints: [
+    { name: 'Sunset Orange', price: 150, color: [1.0, 0.46, 0.16] },
+    { name: 'Lagoon Teal', price: 150, color: [0.11, 0.71, 0.71] },
+    { name: 'Coral Pink', price: 150, color: [1.0, 0.35, 0.55] },
+    { name: 'Midnight Black', price: 150, color: [0.08, 0.08, 0.1] },
+    { name: 'Gold Rush', price: 150, color: [0.95, 0.75, 0.2] },
+  ],
+};
+
+// Respect ranks: the street knows Mara's name as her XP grows.
+export const RESPECT_RANKS = [
+  { xp: 0, name: 'NOBODY', blurb: 'Nobody knows your name. Yet.' },
+  { xp: 500, name: 'HUSTLER', blurb: 'The docks whisper your name.' },
+  { xp: 1500, name: 'STREET NAME', blurb: 'Every corner crew knows the Pelo GT.' },
+  { xp: 3000, name: 'SHOT CALLER', blurb: 'Reyes trusts you with the big jobs.' },
+  { xp: 5000, name: 'STREET BOSS', blurb: 'Solmar Bay is yours.' },
+];
+
+// Crew abilities (keys 5/6/7): name, cooldown seconds, flavour.
+export const CREW_ABILITIES = [
+  { id: 'backup', key: '5', name: 'BACKUP DRIVER', cooldown: 60, desc: 'Juno joins the chase in her own car for 30s.' },
+  { id: 'decoy', key: '6', name: 'DISTRACTION', cooldown: 45, desc: 'A decoy car pulls every cop off your tail for 10s.' },
+  { id: 'getaway', key: '7', name: 'GETAWAY', cooldown: 90, desc: 'A clean route out: lose one wanted star instantly.' },
+];
+
+// Talkable NPCs: name, spot, shirt colour and scripted lines.
+export const NPC_DEFS = [
+  { name: 'Sal the Fisherman', x: 320, z: 280, shirt: [0.2, 0.5, 0.9], lines: [
+    'The Kings moved a shipment through the port last night. Big boxes, no labels.',
+    'Fish bite best at golden hour. So do cops, mind you.',
+    'You need a boat? The marina boys owe me a favour. Talk to me again later.',
+  ] },
+  { name: 'Dita the Mechanic', x: 44, z: 188, shirt: [0.9, 0.5, 0.1], lines: [
+    'Reyes\u2019 garage is the best in Solmar Bay. Bring cash, leave faster.',
+    'That Pelo GT of yours? Twin-turbo it and the SBPD will eat your dust.',
+    'Nitro is cheap insurance. One tank and no cruiser keeps up with you.',
+  ] },
+  { name: 'Old Man Kito', x: -120, z: 40, shirt: [0.6, 0.2, 0.7], lines: [
+    'I watched the Harbor Crew grow from three kids to the kings of the docks.',
+    'The Coral Kings pay the beat cops. Watch the alley behind the market.',
+    'Downtown belongs to whoever holds it at midnight. Remember that.',
+  ] },
+  { name: 'Lena the Courier', x: 120, z: -120, shirt: [0.95, 0.85, 0.2], lines: [
+    'Fastest way across town? Beach road, no lights, no mercy.',
+    'I outran a helicopter once. Once. Never again.',
+    'The street races start near the old arcade. Win one and the crews notice.',
+  ] },
+  { name: 'Father Anselmo', x: -200, z: 280, shirt: [0.9, 0.9, 0.92], lines: [
+    'The city forgives, Mara. Even getaway drivers.',
+    'Drive carefully past the church. The children play in the square.',
+    'Reyes was an altar boy once. The sea air changed him.',
+  ] },
+  { name: 'Vex the Racer', x: 200, z: 44, shirt: [0.3, 0.8, 0.4], lines: [
+    'You think you can drive? The checkpoint race decides. Bring a fast car.',
+    'Three rivals, five checkpoints, one winner. No excuses.',
+    'Beat me and I\u2019ll tell the crews you\u2019re the real deal.',
+  ] },
+];
+
+// Street race: checkpoints around the city, 3 AI rivals.
+export const RACE = {
+  start: [200, 40],
+  checkpoints: [
+    [200, -120],
+    [40, -200],
+    [-120, -120],
+    [-120, 120],
+    [40, 200],
+  ],
+  rivalNames: ['Vex', 'Rook', 'Dante'],
+  rivalColors: [[0.9, 0.2, 0.25], [0.2, 0.5, 0.9], [0.95, 0.85, 0.2]],
+};
 
 export const RANKS = [
   { xp: 0, name: 'ROOKIE' },

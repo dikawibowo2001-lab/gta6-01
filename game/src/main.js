@@ -1,6 +1,6 @@
 // Bootstraps Solmar Bay 3D: the WebGL context, the world, the
 // renderer, the HUD, the input, the frame loop, and the screens
-// (title / pause / help / busted). Exposes window.__game,
+// (title / pause / help / busted / garage). Exposes window.__game,
 // window.__renderer, window.__hud, window.__input and
 // window.__shotReady for the play-test and the screenshot capture.
 
@@ -98,10 +98,35 @@ hud.el.bustedBtn.addEventListener('click', () => {
   showScreen(null);
 });
 
+// Radio button: switch station (same as the R key).
+hud.el.radioBtn.addEventListener('click', () => {
+  world.radio.next();
+});
+
+// Crew buttons: call in the favor (same as keys 5/6/7).
+for (const b of hud.crewButtons) {
+  b.btn.addEventListener('click', () => {
+    world.crew.use(b.id, world);
+  });
+}
+
+// Garage close button.
+hud.el.garageCloseBtn.addEventListener('click', () => {
+  world.garage.open = false;
+  world.audio.click();
+  world.save();
+});
+
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Enter' && world.screen === 'title') {
     world.startGame();
     showScreen(null);
+  }
+  // Escape closes the garage first, then pauses.
+  if (e.code === 'Escape' && world.garage.open) {
+    world.garage.open = false;
+    world.save();
+    return;
   }
   if ((e.code === 'KeyP' || e.code === 'Escape') && world.screen === 'play') {
     world.prevScreen = 'play';

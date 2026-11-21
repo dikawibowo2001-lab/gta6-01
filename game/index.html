@@ -15,7 +15,7 @@
       }
       #game { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: crosshair; }
       #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
-      #hud .screen, #hud .btn { pointer-events: auto; }
+      #hud .screen, #hud .btn, #hud .radio-btn, #hud .crew-btn { pointer-events: auto; }
       .hidden { display: none !important; }
 
       /* Filmic vignette over the 3D view. */
@@ -63,11 +63,20 @@
       .rank { font-size: 11px; font-weight: 800; letter-spacing: 1px; color: #ffd23f; margin-top: 6px; }
       .xpbar { width: 170px; height: 6px; background: rgba(255,255,255,0.18); border-radius: 3px; margin-top: 4px; margin-left: auto; overflow: hidden; }
       .xpfill { height: 100%; background: linear-gradient(90deg, #ffd23f, #ff9a3d); width: 0%; }
+      .respect { font-size: 11px; font-weight: 800; letter-spacing: 1px; color: #ff9ad5; margin-top: 5px; text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
 
       /* Radio ticker, top-centre. */
       .radio { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); text-align: center; text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
       .radio-name { font-size: 13px; font-weight: 800; letter-spacing: 2px; color: #ff9ad5; }
       .radio-track { font-size: 12px; color: #eee; }
+      .radio-hint { font-size: 10px; color: #bbb; letter-spacing: 0.5px; margin-top: 2px; }
+      .radio-btn {
+        position: absolute; left: -34px; top: -2px; width: 26px; height: 26px;
+        border-radius: 50%; border: 1px solid rgba(255,255,255,0.4);
+        background: rgba(255, 154, 213, 0.25); color: #fff; font-size: 14px;
+        cursor: pointer; line-height: 1;
+      }
+      .radio-btn:hover { background: rgba(255, 154, 213, 0.5); }
 
       /* Weapon slots, right. */
       .weapon-panel { position: absolute; top: 172px; right: 16px; display: flex; flex-direction: column; gap: 6px; }
@@ -81,6 +90,37 @@
       .weapon-name { font-size: 12px; font-weight: 700; flex: 1; }
       .weapon-ammo { font-size: 13px; font-weight: 800; color: #fff; }
 
+      /* Crew abilities, right under the weapons. */
+      .crew-panel { position: absolute; top: 428px; right: 16px; width: 196px; }
+      .crew-title { font-size: 10px; font-weight: 800; letter-spacing: 1.5px; color: #9fd8ff; text-align: right; margin-bottom: 5px; text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
+      .crew-btn {
+        position: relative; display: flex; align-items: center; gap: 7px; width: 100%;
+        background: rgba(8, 10, 18, 0.66); border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 6px; padding: 7px 10px; color: #fff; cursor: pointer;
+        margin-bottom: 5px; overflow: hidden; font-family: inherit;
+      }
+      .crew-btn.ready { border-color: #7ddb52; }
+      .crew-btn.cooling { border-color: rgba(255,255,255,0.12); opacity: 0.75; }
+      .crew-cd { position: absolute; inset: 0; pointer-events: none; }
+      .crew-num { font-size: 11px; font-weight: 800; color: #7ddb52; background: rgba(255,255,255,0.1); border-radius: 4px; padding: 2px 6px; position: relative; }
+      .crew-name { font-size: 11px; font-weight: 700; flex: 1; text-align: left; position: relative; }
+      .crew-state { font-size: 10px; font-weight: 800; color: #ffd23f; position: relative; }
+
+      /* Race HUD, top-centre under the radio. */
+      .race-panel { position: absolute; top: 86px; left: 50%; transform: translateX(-50%); text-align: center; }
+      .race-count { font-size: 72px; font-weight: 900; color: #ffd23f; text-shadow: 0 4px 18px rgba(0,0,0,0.9); line-height: 1; }
+      .race-pos { font-size: 34px; font-weight: 900; color: #fff; text-shadow: 0 3px 12px rgba(0,0,0,0.9); }
+      .race-pos.leading { color: #7ddb52; }
+      .race-info { font-size: 12px; font-weight: 700; letter-spacing: 1px; color: #ffd23f; margin-top: 2px; text-shadow: 0 1px 4px rgba(0,0,0,0.9); }
+
+      /* Respect toast. */
+      .toast {
+        position: absolute; top: 64px; left: 50%; transform: translateX(-50%);
+        font-size: 14px; font-weight: 800; letter-spacing: 1px; color: #ff9ad5;
+        background: rgba(8, 10, 18, 0.7); border: 1px solid rgba(255, 154, 213, 0.4);
+        padding: 6px 14px; border-radius: 8px; text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+      }
+
       /* Bottom-left: minimap + vitals. */
       .bottom-left { position: absolute; left: 16px; bottom: 16px; }
       .minimap-wrap { width: 200px; height: 200px; }
@@ -93,7 +133,11 @@
       .bar-fill.hp { background: linear-gradient(90deg, #57d977, #2fae4e); }
       .bar-fill.arm { background: linear-gradient(90deg, #6db9ff, #2f7fd0); }
       .bar-fill.cond { background: linear-gradient(90deg, #ffd23f, #ff9a3d); }
+      .bar-fill.nitro { background: linear-gradient(90deg, #6db9ff, #b44dff); }
+      .bar-fill.prog { background: linear-gradient(90deg, #ff9ad5, #ff5a8a); }
+      .bar-fill.turf { background: linear-gradient(90deg, #3fd96a, #1fae54); }
       .bar-text { font-size: 10px; font-weight: 700; letter-spacing: 1px; color: #ddd; margin: 3px 0 6px; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
+      .nitro-text { color: #b9a5ff; }
 
       /* Bottom-right: speedometer. */
       .bottom-right { position: absolute; right: 18px; bottom: 16px; text-align: right; }
@@ -101,6 +145,7 @@
       .speed-unit { font-size: 12px; font-weight: 800; letter-spacing: 2px; color: #ffd23f; }
       .car-name { font-size: 15px; font-weight: 800; margin-top: 6px; text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
       .cond-bar { width: 190px; margin-top: 5px; margin-left: auto; }
+      .nitro-bar { width: 190px; margin-top: 5px; margin-left: auto; }
 
       /* Dialogue, bottom-centre. */
       .dialogue {
@@ -127,6 +172,65 @@
         background: rgba(0,0,0,0.35); padding: 5px 12px; border-radius: 6px;
       }
       .hint:empty { display: none; }
+
+      /* Weapon wheel overlay. */
+      .wheel {
+        position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+        width: 380px; height: 380px; border-radius: 50%;
+        background: radial-gradient(circle, rgba(8, 10, 18, 0.55) 0%, rgba(8, 10, 18, 0.15) 70%);
+        border: 1px solid rgba(255,255,255,0.18);
+      }
+      .wheel-centre {
+        position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+        font-size: 13px; font-weight: 800; letter-spacing: 3px; color: #ffd23f;
+      }
+      .wheel-seg {
+        position: absolute; transform: translate(-50%, -50%); text-align: center;
+        background: rgba(8, 10, 18, 0.8); border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 8px; padding: 8px 12px; min-width: 96px;
+      }
+      .wheel-seg.active { border-color: #ffd23f; background: rgba(60, 48, 8, 0.9); }
+      .wheel-seg.hover { border-color: #7db8ff; box-shadow: 0 0 14px rgba(125, 184, 255, 0.5); }
+      .wheel-seg-name { font-size: 13px; font-weight: 800; }
+      .wheel-seg-ammo { font-size: 11px; color: #ffd23f; font-weight: 700; margin-top: 2px; }
+      .wheel-hint {
+        position: absolute; left: 50%; bottom: -32px; transform: translateX(-50%);
+        font-size: 12px; color: #ccc; white-space: nowrap; text-shadow: 0 1px 4px rgba(0,0,0,0.9);
+      }
+
+      /* Garage shop. `.screen.garage` beats the later `.screen` rule
+         on specificity, so the panel starts at the top instead of
+         centering and overflowing past both edges. Compact rows so
+         all eight fit in 720px with the title and the close button. */
+      .screen.garage { background: linear-gradient(180deg, rgba(10, 20, 14, 0.88) 0%, rgba(8, 10, 18, 0.92) 100%); justify-content: flex-start; padding-top: 16px; overflow-y: auto; }
+      .screen.garage .screen-title { font-size: 34px; }
+      .screen.garage .screen-sub { margin-top: 2px; }
+      .screen.garage .title-btns { margin-top: 8px; }
+      .garage-cash { font-size: 22px; font-weight: 900; color: #7ddb52; margin-top: 4px; }
+      .garage-rows { width: 640px; max-width: 88vw; margin-top: 6px; display: flex; flex-direction: column; gap: 5px; }
+      .garage-row {
+        display: flex; align-items: center; gap: 12px; text-align: left;
+        background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.14);
+        border-radius: 8px; padding: 5px 14px;
+      }
+      .garage-swatch { width: 28px; height: 28px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.4); flex-shrink: 0; }
+      .garage-info { flex: 1; }
+      .garage-label { font-size: 14px; font-weight: 800; letter-spacing: 0.5px; }
+      .garage-desc { font-size: 12px; color: #ccc; margin-top: 2px; }
+      .garage-level { font-size: 11px; color: #ffd23f; font-weight: 700; margin-top: 2px; }
+      .garage-buy { font-size: 14px; padding: 9px 18px; min-width: 92px; }
+      .garage-buy:disabled { opacity: 0.5; cursor: default; }
+      .garage-msg { font-size: 14px; font-weight: 700; color: #ffd23f; margin-top: 8px; min-height: 18px; }
+
+      /* Progression panel on the pause screen. */
+      .prog-panel { width: 420px; max-width: 86vw; margin-top: 20px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.14); border-radius: 10px; padding: 14px 18px; text-align: left; }
+      .prog-rank { font-size: 15px; font-weight: 800; letter-spacing: 1px; color: #ff9ad5; }
+      .prog-bar { margin-top: 8px; }
+      .prog-next { font-size: 12px; color: #ccc; margin-top: 6px; }
+      .turf-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+      .turf-name { font-size: 12px; font-weight: 800; width: 96px; letter-spacing: 0.5px; }
+      .turf-bar { flex: 1; }
+      .turf-val { font-size: 12px; font-weight: 800; color: #3fd96a; width: 40px; text-align: right; }
 
       /* Full screens. */
       .screen {

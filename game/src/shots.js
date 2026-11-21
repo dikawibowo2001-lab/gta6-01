@@ -3,11 +3,15 @@
 // best. The capture script waits for window.__shotReady.
 //
 //   title   — the title screen over a slow orbit of downtown.
-//   drive   — Mara in the Pelo GT, mid-mission, HUD + minimap live.
+//   drive   — Mara in the Pelo GT with the WEAPON WHEEL OPEN and the
+//             radio ticker live: two of the v3 systems, front and
+//             centre, mid-mission with the HUD + minimap live.
 //   chase   — THE MONEY SHOT: 4 stars, helicopter VISIBLE with its
 //             spotlight, three cruisers, a roadblock ahead, dispatch
 //             list, dialogue, mission panel — every system at once.
-//   mission — JOB COMPLETE banner + payout + Reyes dialogue.
+//   mission — THE GARAGE: Reyes' upgrade shop open over the city,
+//             engine/armour/nitro/paint rows and Mara's cash on hand —
+//             the v3 headline system, impossible to miss.
 
 import { Car } from './vehicles.js';
 
@@ -22,7 +26,8 @@ export function stageShot(shot, world, renderer) {
   w.hint = '';
   w.hintTimer = 0;
   if (shot === 'drive') {
-    // Mission 1, stage 2: driving the stolen Pelo GT to the garage.
+    // Mission 1, stage 2: driving the stolen Pelo GT to the garage,
+    // with the weapon wheel open and the synthwave station playing.
     w.missions.index = 0;
     w.missions.start();
     w.missions.stage = 1;
@@ -40,6 +45,13 @@ export function stageShot(shot, world, renderer) {
     w.autoLaneZ = w.player.car.z;
     w.cash = 300;
     w.xp = 420;
+    // Weapon wheel pinned open (the capture can't hold Q) with the
+    // shotgun hovered, and the radio on NEON 101.7.
+    w.weapons.forceOpen = true;
+    w.weapons.hover = 'shotgun';
+    w.combat.select('shotgun');
+    w.radio.idx = 1;
+    w.radio.trackIdx = 0;
     return { frames: 50 };
   }
   if (shot === 'chase') {
@@ -76,6 +88,7 @@ export function stageShot(shot, world, renderer) {
     // Four stars + helicopter + three cruisers in frame.
     w.police.heat = 65;
     w.police.spawnTimer = 5; // don't auto-spawn more right away
+    w.police.blockTimer = 30; // don't auto-place a second roadblock on the car's path
     // The two pursuit cruisers stage well back and offset to the
     // sides: their AI steers them onto the car's tail, and with the
     // pinned camera close behind, a cruiser on the tail would loom
@@ -120,13 +133,13 @@ export function stageShot(shot, world, renderer) {
     return { frames: 60 };
   }
   if (shot === 'mission') {
-    // Mission complete: banner, payout, dialogue, cash on hand.
+    // The garage shop open: Mara has cash, the car is parked at the
+    // garage door, and every upgrade row is on screen.
     w.missions.index = 1;
     w.missions.completed = 1;
-    w.cash = 300;
+    w.cash = 1250;
     w.xp = 420;
-    w.missions.banner = { title: 'JOB COMPLETE', sub: 'First Wheels  +$200', t: 120 };
-    w.missions.dialogue = { name: 'Reyes', text: 'Clean work. The Harbor Crew just got faster.', t: 120 };
+    w.progression.xp = 550; // HUSTLER — the pause panel would show it
     const sports = w.parked.find((c) => c.type === 'sports')
       || w.traffic.cars.find((c) => c.type === 'sports' && c.driver === null);
     if (sports) {
@@ -134,7 +147,18 @@ export function stageShot(shot, world, renderer) {
       w.player.z = sports.z;
       w.enterCar();
     }
-    w.player.car.heading = Math.PI / 2;
+    const car = w.player.car;
+    const g = w.city.spawns.reyesGarage;
+    car.x = g[0];
+    car.z = g[1] - 8;
+    car.heading = Math.PI;
+    car.speed = 0;
+    w.player.x = car.x;
+    w.player.z = car.z;
+    w.player.heading = car.heading;
+    w.hint = '';
+    w.hintTimer = 0;
+    w.garage.open = true;
     return { frames: 40 };
   }
   return { frames: 30 };

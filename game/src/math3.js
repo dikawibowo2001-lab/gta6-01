@@ -25,6 +25,14 @@ export function angleLerp(a, b, t) {
   return a + d * t;
 }
 
+// Shortest signed difference between two headings.
+export function angleDiff(a, b) {
+  let d = (b - a) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
+
 export function dist2D(ax, az, bx, bz) {
   const dx = ax - bx;
   const dz = az - bz;

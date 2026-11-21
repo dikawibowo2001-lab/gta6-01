@@ -1,6 +1,8 @@
 // Input: keyboard state with edge-triggered "just pressed" keys, plus
 // the mouse (position, buttons, and the aim vector the combat uses).
 // The game reads this once per frame; endFrame() clears the edges.
+// Tab is captured too (weapon wheel) — its default focus behaviour is
+// suppressed so the wheel doesn't steal the browser's focus.
 
 export class Input {
   constructor(canvas) {
@@ -17,7 +19,7 @@ export class Input {
       if (e.repeat) return;
       this.keys.add(e.code);
       this.pressed.add(e.code);
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) {
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Tab'].includes(e.code)) {
         e.preventDefault();
       }
     });
@@ -74,6 +76,11 @@ export class Input {
 
   get handbrake() {
     return this.down('Space');
+  }
+
+  // The weapon wheel opens while Q or Tab is held.
+  get wheelHeld() {
+    return this.down('KeyQ') || this.down('Tab');
   }
 
   endFrame() {

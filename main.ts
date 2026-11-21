@@ -1,4 +1,4 @@
-// Solmar Bay — Sun, Sand & Sirens (3D, v2.1) for the gta6-01 bounty.
+// Solmar Bay — Sun, Sand & Sirens (3D, v3) for the gta6-01 bounty.
 // Node 22, standard library only. The game itself lives in game/
 // beside this file: plain static files a desktop browser loads
 // offline — game/index.html plus its ES modules, no third-party

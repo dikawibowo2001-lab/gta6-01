@@ -1,23 +1,29 @@
-// Combat: Mara's fists, pistol and SMG, plus the shots NPCs fire back.
-// Shooting is a hitscan ray from Mara toward the mouse aim point: the
-// renderer turns the screen-space crosshair into a world direction, and
-// this module finds the first walker or car the ray crosses.
+// Combat: Mara's fists and four guns — pistol, SMG, shotgun, rifle —
+// each with its own damage, fire rate, spread and tracer colour. The
+// shotgun fires six pellets per trigger pull. Shooting is a hitscan
+// ray from Mara toward the mouse aim point: the renderer turns the
+// screen-space crosshair into a world direction, and this module finds
+// the first walker or car each ray crosses. The weapon wheel
+// (weapons.js) owns selection; this module owns the shooting.
 
 import { dist2D, clamp } from './math3.js';
 
 export const WEAPONS = {
-  fists: { name: 'FISTS', damage: 12, range: 3.2, rate: 0.45, mag: Infinity, auto: false, spread: 0 },
-  pistol: { name: 'PISTOL', damage: 34, range: 60, rate: 0.28, mag: 12, auto: false, spread: 0.012 },
-  smg: { name: 'SMG', damage: 20, range: 48, rate: 0.09, mag: 30, auto: true, spread: 0.035 },
+  fists: { name: 'FISTS', damage: 12, range: 3.2, rate: 0.45, mag: Infinity, auto: false, spread: 0, pellets: 1, tracer: [1, 0.9, 0.5], flash: 0.3 },
+  pistol: { name: 'PISTOL', damage: 34, range: 60, rate: 0.28, mag: 12, auto: false, spread: 0.012, pellets: 1, tracer: [1, 0.9, 0.5], flash: 0.5 },
+  smg: { name: 'SMG', damage: 20, range: 48, rate: 0.09, mag: 30, auto: true, spread: 0.035, pellets: 1, tracer: [1, 0.75, 0.3], flash: 0.45 },
+  shotgun: { name: 'SHOTGUN', damage: 14, range: 26, rate: 0.8, mag: 6, auto: false, spread: 0.09, pellets: 6, tracer: [1, 0.6, 0.25], flash: 0.9 },
+  rifle: { name: 'RIFLE', damage: 55, range: 90, rate: 0.5, mag: 20, auto: false, spread: 0.006, pellets: 1, tracer: [0.6, 0.9, 1], flash: 0.6 },
 };
 
-const WEAPON_ORDER = ['fists', 'pistol', 'smg'];
+export const WEAPON_ORDER = ['fists', 'pistol', 'smg', 'shotgun', 'rifle'];
+export const GUN_ORDER = ['pistol', 'smg', 'shotgun', 'rifle'];
 
 export class Combat {
   constructor() {
     this.current = 'pistol';
-    this.ammo = { pistol: 12, smg: 30 };
-    this.reserve = { pistol: 96, smg: 150 };
+    this.ammo = { pistol: 12, smg: 30, shotgun: 6, rifle: 20 };
+    this.reserve = { pistol: 96, smg: 150, shotgun: 36, rifle: 80 };
     this.cooldown = 0;
     this.reloading = 0;
     this.reloadTotal = 0;
@@ -75,9 +81,9 @@ export class Combat {
     return this.cooldown <= 0 && this.reloading <= 0;
   }
 
-  // Fire from (ox, oz) along a heading. Returns a hit report the world
-  // turns into damage, particles and sound. `targets` is a list of
-  // {x, z, radius, kind, ref} to test the ray against.
+  // Fire from (ox, oz) along a heading. Returns a report with one
+  // entry per pellet: {hits: [{hit, hitX, hitZ, damage}], ...}. The
+  // world turns each entry into damage, particles and sound.
   fire(ox, oz, heading, targets) {
     const w = this.weapon;
     if (!this.canFire) return null;
@@ -90,33 +96,37 @@ export class Combat {
     }
     this.cooldown = w.rate;
     this.muzzleFlash = 0.07;
-    const spread = (Math.random() - 0.5) * 2 * w.spread;
-    const a = heading + spread;
-    const dx = Math.sin(a);
-    const dz = Math.cos(a);
-    const endX = ox + dx * w.range;
-    const endZ = oz + dz * w.range;
-    let best = null;
-    let bestT = Infinity;
-    for (const t of targets) {
-      // Ray-circle intersection in the XZ plane.
-      const rx = t.x - ox;
-      const rz = t.z - oz;
-      const proj = rx * dx + rz * dz;
-      if (proj < 0 || proj > w.range) continue;
-      const px = ox + dx * proj;
-      const pz = oz + dz * proj;
-      const off = dist2D(px, pz, t.x, t.z);
-      if (off < (t.radius || 1.2) && proj < bestT) {
-        bestT = proj;
-        best = { ...t, hitX: px, hitZ: pz };
+    const hits = [];
+    for (let p = 0; p < w.pellets; p++) {
+      const spread = (Math.random() - 0.5) * 2 * w.spread;
+      const a = heading + spread;
+      const dx = Math.sin(a);
+      const dz = Math.cos(a);
+      const endX = ox + dx * w.range;
+      const endZ = oz + dz * w.range;
+      let best = null;
+      let bestT = Infinity;
+      for (const t of targets) {
+        // Ray-circle intersection in the XZ plane.
+        const rx = t.x - ox;
+        const rz = t.z - oz;
+        const proj = rx * dx + rz * dz;
+        if (proj < 0 || proj > w.range) continue;
+        const px = ox + dx * proj;
+        const pz = oz + dz * proj;
+        const off = dist2D(px, pz, t.x, t.z);
+        if (off < (t.radius || 1.2) && proj < bestT) {
+          bestT = proj;
+          best = { ...t, hitX: px, hitZ: pz };
+        }
       }
+      const hitX = best ? best.hitX : endX;
+      const hitZ = best ? best.hitZ : endZ;
+      hits.push({ hit: best, hitX, hitZ, damage: w.damage });
     }
-    const hitX = best ? best.hitX : endX;
-    const hitZ = best ? best.hitZ : endZ;
     this.lastShotFrom = [ox, oz];
-    this.lastShotTo = [hitX, hitZ];
-    return { hit: best, hitX, hitZ, damage: w.damage, weapon: this.current };
+    this.lastShotTo = [hits[0].hitX, hits[0].hitZ];
+    return { hits, weapon: this.current };
   }
 
   // An NPC (cop or rival) shoots at Mara: simpler — a timed shot with a
@@ -144,9 +154,9 @@ export class Combat {
     const endZ = oz + Math.cos(heading) * w.range;
     for (const t of targets) {
       if (dist2D(endX, endZ, t.x, t.z) < (t.radius || 1.2) + 0.8) {
-        return { hit: t, hitX: t.x, hitZ: t.z, damage: w.damage, weapon: 'fists' };
+        return { hits: [{ hit: t, hitX: t.x, hitZ: t.z, damage: w.damage }], weapon: 'fists' };
       }
     }
-    return { hit: null, hitX: endX, hitZ: endZ, damage: 0, weapon: 'fists' };
+    return { hits: [{ hit: null, hitX: endX, hitZ: endZ, damage: 0 }], weapon: 'fists' };
   }
 }

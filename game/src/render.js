@@ -1,8 +1,8 @@
 // The renderer: cameras, meshes for everything that moves, and the
 // draw pass. Three cameras — a slow downtown orbit for the title, a
 // chase cam behind the car, and an over-shoulder cam on foot — and one
-// mesh per car, walker and helicopter, built once and drawn with a
-// model matrix each frame.
+// mesh per car, walker, boat and helicopter, built once and drawn with
+// a model matrix each frame.
 //
 // CAMERA + HELICOPTER: the chase cam looks at a point a little above
 // the car's roof, and while the helicopter is up it pitches up further
@@ -14,11 +14,16 @@
 // (renderer.shotCam, set by shots.js): exact position, no damping lag,
 // so the player's car sits large in the lower-center frame AND the
 // helicopter stays in the upper frame at once. Gameplay never sets it.
+//
+// V3 additions: boats at the marina, glowing beacons for the garage
+// and the race start, checkpoint beacons while racing, yellow markers
+// over talkable NPCs, charred husks for exploded wrecks, and a screen
+// shake that fires when a car explodes.
 
 import { Builder } from './gl.js';
 import {
   mat4Identity, mat4Multiply, mat4Perspective, mat4LookAt, mat4TRS,
-  mat4Translate, mat4RotateY, mat4RotateX, mat4Scale, damp, angleLerp, clamp,
+  mat4Translate, mat4RotateY, mat4RotateX, mat4Scale, damp, angleLerp, clamp, dist2D,
 } from './math3.js';
 import { PALETTE, WORLD } from './config.js';
 
@@ -31,17 +36,23 @@ export class Renderer {
     this.engine = null; // set by main.js (the Engine instance)
     this.carMeshes = new Map(); // "type|r,g,b" -> Mesh
     this.walkerMeshes = new Map(); // "shirt|pants|skin|role" -> Mesh
+    this.boatMeshes = new Map(); // "r,g,b" -> Mesh
     this.heliBody = null;
     this.heliRotor = null;
     this.spotCone = null;
     this.poolDisc = null;
     this.markerMesh = null;
+    this.garageMarkerMesh = null;
+    this.raceMarkerMesh = null;
+    this.checkpointMesh = null;
+    this.npcMarkerMesh = null;
     this.pickupMeshes = {};
     this.camPos = [0, 30, 60];
     this.camLook = [0, 0, 0];
     this.camYaw = 0;
     this.orbitT = 0;
     this.shotCam = null; // pinned chase-cam framing for a staged shot
+    this.shake = 0; // screen shake 0..1, decays each frame
     this.built = false;
   }
 
@@ -82,6 +93,25 @@ export class Renderer {
     mk.cylinder(0, 8, 0, 1.1, 16, [1.0, 0.82, 0.25], 10);
     mk.disc(0, 0.25, 0, 4.5, [1.0, 0.82, 0.25], 20);
     this.markerMesh = mk.finish(gl);
+    // Garage marker: green beacon.
+    const gm = new Builder(false);
+    gm.cylinder(0, 8, 0, 1.1, 16, [0.35, 0.9, 0.4], 10);
+    gm.disc(0, 0.25, 0, 4.5, [0.35, 0.9, 0.4], 20);
+    this.garageMarkerMesh = gm.finish(gl);
+    // Race start marker: orange beacon.
+    const rm = new Builder(false);
+    rm.cylinder(0, 8, 0, 1.1, 16, [1.0, 0.55, 0.15], 10);
+    rm.disc(0, 0.25, 0, 4.5, [1.0, 0.55, 0.15], 20);
+    this.raceMarkerMesh = rm.finish(gl);
+    // Race checkpoint: a tall orange ring beacon.
+    const cp = new Builder(false);
+    cp.cylinder(0, 10, 0, 1.4, 20, [1.0, 0.55, 0.15], 10);
+    cp.disc(0, 0.25, 0, 7, [1.0, 0.55, 0.15], 20);
+    this.checkpointMesh = cp.finish(gl);
+    // NPC marker: a small floating yellow diamond.
+    const nm = new Builder(false);
+    nm.box(0, 0, 0, 0.7, 0.7, 0.7, [1.0, 0.85, 0.2]);
+    this.npcMarkerMesh = nm.finish(gl);
     // Pickups: health (white box + red cross bars), armour (blue),
     // cash (green) — small floating cubes.
     const hp = new Builder(false);
@@ -101,13 +131,15 @@ export class Renderer {
   }
 
   carMesh(car) {
-    const key = `${car.type}|${car.color.join(',')}`;
+    // A husk renders charred: same shape, blackened paint.
+    const color = car.wreckState === 'husk' ? [0.08, 0.08, 0.08] : car.color;
+    const key = `${car.type}|${color.join(',')}`;
     let m = this.carMeshes.get(key);
     if (m) return m;
     const b = new Builder(true);
-    const c = car.color;
+    const c = color;
     const dark = [0.1, 0.12, 0.16];
-    const glass = [0.2, 0.35, 0.45];
+    const glass = car.wreckState === 'husk' ? [0.05, 0.05, 0.06] : [0.2, 0.35, 0.45];
     if (car.type === 'truck') {
       b.box(0, 1.1, 0.8, 2.4, 1.8, 2.2, c);
       b.box(0, 2.0, -1.6, 2.6, 2.6, 5.4, [0.85, 0.85, 0.86]);
@@ -146,6 +178,24 @@ export class Renderer {
     }
     m = b.finish(this.gl);
     this.carMeshes.set(key, m);
+    return m;
+  }
+
+  boatMesh(boat) {
+    const key = boat.color.join(',');
+    let m = this.boatMeshes.get(key);
+    if (m) return m;
+    const b = new Builder(true);
+    const c = boat.color;
+    // Hull: a long tapered box, white deck, a small windshield and
+    // an outboard motor.
+    b.box(0, 0.5, 0, 2.2, 1.0, 6.5, c);
+    b.box(0, 1.1, -0.5, 1.9, 0.5, 5.2, [0.92, 0.92, 0.94]);
+    b.box(0, 1.5, 1.2, 1.8, 0.7, 0.3, [0.2, 0.35, 0.45]);
+    b.box(0, 1.0, -3.0, 1.2, 0.9, 0.5, [0.15, 0.15, 0.16]);
+    b.box(0, 0.4, 3.2, 1.6, 0.6, 0.6, [0.1, 0.12, 0.16]);
+    m = b.finish(this.gl);
+    this.boatMeshes.set(key, m);
     return m;
   }
 
@@ -233,6 +283,20 @@ export class Renderer {
         damp(this.camLook[1], lookY, 4, dt),
         car.z + Math.cos(car.heading) * lookAhead,
       ];
+    } else if (p.inBoat && p.boat) {
+      // Boat chase cam: further back, higher, so the wake reads.
+      const boat = p.boat;
+      const behind = boat.heading + Math.PI;
+      const tx = boat.x + Math.sin(behind) * 13;
+      const tz = boat.z + Math.cos(behind) * 13;
+      this.camPos[0] = damp(this.camPos[0], tx, 6, dt);
+      this.camPos[1] = damp(this.camPos[1], 6.5, 6, dt);
+      this.camPos[2] = damp(this.camPos[2], tz, 6, dt);
+      this.camLook = [
+        boat.x + Math.sin(boat.heading) * 14,
+        2,
+        boat.z + Math.cos(boat.heading) * 14,
+      ];
     } else {
       // Over-shoulder on foot: behind Mara, mouse-steered yaw.
       const yaw = world.camYaw;
@@ -243,6 +307,14 @@ export class Renderer {
       this.camPos[1] = damp(this.camPos[1], 3.4, 10, dt);
       this.camPos[2] = damp(this.camPos[2], tz, 10, dt);
       this.camLook = [p.x + Math.sin(yaw) * 8, 1.6, p.z + Math.cos(yaw) * 8];
+    }
+    // Explosion shake: a decaying random offset on the camera.
+    if (this.shake > 0) {
+      this.shake = Math.max(0, this.shake - dt * 1.8);
+      const s = this.shake * 0.9;
+      this.camPos[0] += (Math.random() - 0.5) * s;
+      this.camPos[1] += (Math.random() - 0.5) * s * 0.6;
+      this.camPos[2] += (Math.random() - 0.5) * s;
     }
   }
 
@@ -279,6 +351,36 @@ export class Renderer {
       engine.plainAlpha = 1;
     }
 
+    // Garage + race beacons (always visible in play, so the player can
+    // find them; they pulse gently). They fade out when Mara is close
+    // — a 16-unit column filling the frame is navigation, not a view.
+    if (world.screen === 'play') {
+      const pulse = 0.6 + Math.sin(world.time * 2) * 0.2;
+      engine.plainAlpha = pulse;
+      const g = world.city.spawns.reyesGarage;
+      if (dist2D(world.player.x, world.player.z, g[0], g[1]) > 30) {
+        this.garageMarkerMesh.draw(engine, mat4Translate(g[0], 0, g[1]), vp);
+      }
+      if (!world.races.active) {
+        const rs = world.city.spawns.raceStart;
+        if (dist2D(world.player.x, world.player.z, rs[0], rs[1]) > 30) {
+          this.raceMarkerMesh.draw(engine, mat4Translate(rs[0], 0, rs[1]), vp);
+        }
+      }
+      engine.plainAlpha = 1;
+    }
+
+    // Race checkpoint beacon.
+    if (world.races.active && world.races.phase === 'racing') {
+      const cp = world.races.nextCheckpoint;
+      if (cp) {
+        const pulse = 0.8 + Math.sin(world.time * 5) * 0.2;
+        engine.plainAlpha = pulse;
+        this.checkpointMesh.draw(engine, mat4Translate(cp[0], 0, cp[1]), vp);
+        engine.plainAlpha = 1;
+      }
+    }
+
     // Pickups: spin + bob.
     for (const pk of world.pickups) {
       if (pk.taken) continue;
@@ -289,20 +391,20 @@ export class Renderer {
       mesh.draw(engine, m, vp);
     }
 
-    // Cars: traffic, parked, cruisers, roadblocks, rivals.
+    // Cars: traffic, parked, cruisers, roadblocks, rivals, race rivals,
+    // crew cars.
     const allCars = [
       ...world.traffic.cars,
       ...world.parked,
       ...world.police.cruisers,
       ...world.rivalCars,
+      ...world.raceCars,
+      ...world.crewCars,
     ];
     const seen = new Set();
     for (const car of allCars) {
       if (seen.has(car.id)) continue;
       seen.add(car.id);
-      if (car === world.player.car && world.player.inCar) {
-        // The player's car still draws (chase cam sees it).
-      }
       const mesh = this.carMesh(car);
       const tilt = car.steer * 0.06 * Math.min(1, Math.abs(car.speed) / 12);
       let model = mat4TRS(car.x, 0, car.z, car.heading, 1, 1, 1);
@@ -315,17 +417,36 @@ export class Renderer {
     }
     engine.flashColor = [1, 0.2, 0.1];
 
-    // Walkers: player (when on foot), peds, cops, rivals.
+    // Boats at the marina and on the water.
+    for (const boat of world.boats.list) {
+      const mesh = this.boatMesh(boat);
+      const bob = boat.occupied ? 0 : Math.sin(world.time * 1.2 + boat.z) * 0.15;
+      const model = mat4TRS(boat.x, bob, boat.z, boat.heading, 1, 1, 1);
+      mesh.draw(engine, model, vp);
+    }
+
+    // Walkers: player (when on foot), peds, cops, rivals, NPCs.
     const walkers = [];
-    if (!world.player.inCar) walkers.push(world.player);
+    if (!world.player.inCar && !world.player.inBoat) walkers.push(world.player);
     for (const p of world.peds) if (p.alive) walkers.push(p);
     for (const c of world.police.cops) if (c.alive) walkers.push(c);
     for (const r of world.rivals) if (r.alive) walkers.push(r);
+    for (const n of world.npcs.list) walkers.push(n);
     for (const w of walkers) {
       const mesh = this.walkerMesh(w);
       const bob = w.moving ? Math.abs(Math.sin(w.walkPhase)) * 0.12 : 0;
       const model = mat4TRS(w.x, bob, w.z, w.heading, 1, 1, 1);
       mesh.draw(engine, model, vp);
+    }
+
+    // NPC markers: spinning yellow diamonds above talkable NPCs.
+    for (const n of world.npcs.list) {
+      const y = 3.6 + Math.sin(world.time * 2 + n.x) * 0.25;
+      const m = mat4Multiply(
+        mat4Translate(n.x, y, n.z),
+        mat4Multiply(mat4RotateY(world.time * 1.5), mat4RotateX(Math.PI / 4)),
+      );
+      this.npcMarkerMesh.draw(engine, m, vp);
     }
 
     // Helicopter + spotlight.

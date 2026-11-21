@@ -1,7 +1,9 @@
-// Walkers: Mara, the pedestrians on the sidewalks, the foot cops and
-// the Coral Kings rivals. A walker is a position, a heading, a walk
-// cycle and a health pool; the renderer draws them as low-poly figures
-// (torso, head, legs that swing with the stride).
+// Walkers: Mara, the pedestrians on the sidewalks, the foot cops, the
+// Coral Kings rivals and the talkable NPCs. A walker is a position, a
+// heading, a walk cycle and a health pool; the renderer draws them as
+// low-poly figures (torso, head, legs that swing with the stride).
+// NPCs are walkers too — they stand at their spot with a floating
+// marker and wait for Mara to press E.
 
 import { clamp, dist2D } from './math3.js';
 import { WORLD } from './config.js';
@@ -23,7 +25,7 @@ export class Walker {
     this.x = x;
     this.z = z;
     this.heading = heading;
-    this.role = role; // 'player' | 'ped' | 'cop' | 'rival'
+    this.role = role; // 'player' | 'ped' | 'cop' | 'rival' | 'npc'
     this.hp = 100;
     this.armour = 0;
     this.speed = 0; // current ground speed
@@ -41,6 +43,10 @@ export class Walker {
     this.fleeTimer = 0;
     this.shootTimer = 0;
     this.isPlayer = false;
+    // NPCs: a display name and scripted lines (see npcs.js).
+    this.npcName = null;
+    this.npcLines = null;
+    this.npcLineIdx = 0;
   }
 
   get alive() {

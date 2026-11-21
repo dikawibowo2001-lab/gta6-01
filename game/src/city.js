@@ -5,7 +5,8 @@
 // draws the moving parts.
 //
 // The city also owns the named spawn points every system shares: where
-// Mara starts, where Reyes' garage is, where the missions point.
+// Mara starts, where Reyes' garage is, where the races start, where
+// the boats dock, and where the missions point.
 
 import { Builder } from './gl.js';
 import { WORLD, PALETTE } from './config.js';
@@ -29,6 +30,11 @@ export class City {
       beachDrop: [340, 120],
       portTruck: [-280, -200],
       sportsParked: [120, 40],
+      getawayCar: [280, 200],
+      vault: [0, 80],
+      cordon: [120, 120],
+      raceStart: [200, 40],
+      boatDock: [300, 300],
     };
     this.build();
   }
@@ -125,6 +131,13 @@ export class City {
         }
       }
     }
+
+    // Reyes' garage: a low workshop block with a big roller door, at
+    // the garage spawn — the green beacon in the world marks it.
+    lit.box(40, 3, 208, 22, 6, 14, [0.55, 0.52, 0.48]);
+    lit.box(40, 2.2, 200.6, 16, 4.4, 0.4, [0.3, 0.55, 0.8]);
+    lit.boxTop(40, 6.4, 208, 23, 0.8, 15, [0.5, 0.47, 0.44], [0.32, 0.3, 0.3]);
+    plain.face(40, 5.2, 200.5, 0, 0, -1, -1, 0, 0, 0, 1, 0, 14, 1.6, [1.0, 0.75, 0.2]);
 
     // Palms: along the beach, the marina, and scattered on blocks.
     for (let z = -B + 20; z < B - 20; z += 26) {

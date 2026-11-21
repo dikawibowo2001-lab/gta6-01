@@ -1,9 +1,15 @@
-// The story: eight jobs for The Harbor Crew. Mara Vega, getaway
+// The story: twelve jobs for The Harbor Crew. Mara Vega, getaway
 // driver, runs work for Reyes and Juno while the Coral Kings try to
 // take her streets. Each job is a chain of stages — steal a car, drive
-// to a marker, clear the rivals, survive the heat — with dialogue at
-// every turn. The manager tracks the active job, its stage, its timers
-// and its payouts, and hands the HUD the objective text and the marker.
+// to a marker, clear the rivals, survive the heat, win a race, take
+// back a district — with dialogue at every turn. The manager tracks
+// the active job, its stage, its timers and its payouts, and hands
+// the HUD the objective text and the marker.
+//
+// Jobs 9–12 are the endgame: a multi-stage heist finale, a street
+// race, a rescue from a police cordon, and a turf war for Downtown.
+// The later jobs require respect ranks (see progression.js) — the
+// crew doesn't hand the big jobs to a nobody.
 
 export const MISSIONS = [
   {
@@ -100,6 +106,59 @@ export const MISSIONS = [
     ],
     outro: ['Reyes', 'Sun, sand and sirens — and you outran all three.'],
   },
+  {
+    id: 'harbor-heist',
+    name: 'The Harbor Heist',
+    giver: 'Reyes',
+    reward: 2500,
+    minRank: 1,
+    intro: ['Reyes', 'The big one, Mara. The Kings stash their take in the downtown vault. Steal the getaway car, crack the vault, and outrun five stars of fury.'],
+    stages: [
+      { type: 'steal', text: 'Steal the getaway car from the marina', target: 'getawayCar' },
+      { type: 'timed', text: 'Reach the downtown vault in 90 seconds', target: 'vault', marker: 'vault', time: 90 },
+      { type: 'survive', text: 'Escape the vault with 5 stars for 60 seconds', time: 60, stars: 5 },
+      { type: 'goto', text: 'Lose the heat and reach the safehouse', target: 'safehouse', marker: 'safehouse' },
+    ],
+    outro: ['Reyes', 'Two and a half grand, clean. The Kings are finished in this town.'],
+  },
+  {
+    id: 'strand-grand-prix',
+    name: 'Strand Grand Prix',
+    giver: 'Juno',
+    reward: 1200,
+    minRank: 1,
+    intro: ['Juno', 'Vex is talking trash about your driving all over the Strand. Shut him up — win the street race, first place, no excuses.'],
+    stages: [
+      { type: 'race', text: 'Win the street race at the old arcade', target: 'raceStart', marker: 'raceStart' },
+    ],
+    outro: ['Juno', 'Vex is quiet now. The whole Strand saw you win.'],
+  },
+  {
+    id: 'cordon-break',
+    name: 'Cordon Break',
+    giver: 'Reyes',
+    reward: 1800,
+    minRank: 2,
+    intro: ['Reyes', 'Dante is trapped in a police cordon downtown — four Kings holding the block. Break the cordon, get him out, bring him home.'],
+    stages: [
+      { type: 'kill', text: 'Clear the 4 Coral Kings at the cordon', target: 'cordon', count: 4, marker: 'cordon' },
+      { type: 'goto', text: 'Drive Dante to the safehouse', target: 'safehouse', marker: 'safehouse' },
+    ],
+    outro: ['Reyes', 'Dante owes you his life. The crew owes you everything.'],
+  },
+  {
+    id: 'turf-war',
+    name: 'Turf War',
+    giver: 'Juno',
+    reward: 3000,
+    minRank: 3,
+    intro: ['Juno', 'Downtown belongs to whoever holds it at midnight. Take it back — five Kings, on their own turf — and Solmar Bay is ours for good.'],
+    stages: [
+      { type: 'turf', text: 'Take Downtown: defeat 5 Coral Kings in the district', target: 'downtown', count: 5, marker: 'raceStart' },
+      { type: 'goto', text: 'Plant the flag at the safehouse', target: 'safehouse', marker: 'safehouse' },
+    ],
+    outro: ['Juno', 'Downtown is Harbor Crew turf now. You did it, Mara. Street boss.'],
+  },
 ];
 
 export class MissionManager {
@@ -134,6 +193,20 @@ export class MissionManager {
 
   get isDone() {
     return this.index >= MISSIONS.length;
+  }
+
+  // The respect-rank gate: the later jobs need a name on the street.
+  rankGate(world) {
+    const m = this.mission;
+    if (!m || !m.minRank) return true;
+    return world.progression.rankIndex() >= m.minRank;
+  }
+
+  rankGateText(world) {
+    const m = this.mission;
+    if (!m || !m.minRank) return '';
+    const need = ['NOBODY', 'HUSTLER', 'STREET NAME', 'SHOT CALLER', 'STREET BOSS'][m.minRank];
+    return `REQUIRES RESPECT: ${need}`;
   }
 
   start() {
@@ -189,6 +262,17 @@ export class MissionManager {
       if (this.kills >= s.count) return this.advance(world);
     } else if (s.type === 'wreck') {
       if (this.wrecks >= s.count) return this.advance(world);
+    } else if (s.type === 'race') {
+      // The race mission completes when Mara wins a street race; a
+      // loss just leaves the stage open to retry.
+      if (world.races.lastResult === 'win') return this.advance(world);
+      if (world.races.lastResult === 'lose') {
+        world.races.lastResult = null;
+        this.say('Juno', 'Not this time. Get back to the start line and try again.', 4);
+      }
+    } else if (s.type === 'turf') {
+      // Kills only count inside Downtown (the turf stage's district).
+      if (this.kills >= s.count) return this.advance(world);
     } else if (s.type === 'survive') {
       if (this.timer === 0) {
         this.timer = s.time;
@@ -209,6 +293,11 @@ export class MissionManager {
       this.completed += 1;
       world.cash += m.reward;
       world.xp += 400;
+      world.progression.addXp(400, m.name);
+      // The turf war flips Downtown to the crew.
+      if (m.id === 'turf-war') {
+        world.progression.turf.downtown = 100;
+      }
       this.justCompleted = m;
       this.banner = { title: 'JOB COMPLETE', sub: `${m.name}  +$${m.reward}`, t: 4 };
       this.say(m.outro[0], m.outro[1], 6);

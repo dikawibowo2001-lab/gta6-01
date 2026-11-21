@@ -12,6 +12,10 @@
 // of the chase cam together with its spotlight cone and the bright pool
 // it throws on the road. The chase camera also pitches up a few degrees
 // while the heli is up.
+//
+// CREW ABILITIES (v3): the distraction decoy gives the cruisers a fake
+// target for 10 seconds, and the getaway ability drops one star of
+// heat instantly. Both live here because the police own the heat.
 
 import { Car } from './vehicles.js';
 import { Walker } from './entities.js';
@@ -71,6 +75,9 @@ export class Police {
     this.callsigns = shuffled(this.rng, CALLSIGNS);
     this.callsignIdx = 0;
     this.sirenOn = false;
+    // Crew distraction: a fake target the cruisers chase instead of
+    // Mara while it lasts. {x, z, t} or null.
+    this.decoy = null;
   }
 
   get stars() {
@@ -90,6 +97,13 @@ export class Police {
 
   addHeat(amount) {
     this.heat = clamp(this.heat + amount, 0, 100);
+  }
+
+  // Drop exactly one star of heat (crew getaway ability).
+  loseStar() {
+    if (this.stars <= 0) return false;
+    this.heat = Math.max(0, this.heat - 20);
+    return true;
   }
 
   // The dispatch list the HUD shows: every unit, its callsign, its
@@ -125,6 +139,14 @@ export class Police {
   update(dt, player, playerCar, world) {
     const stars = this.stars;
     this.sirenOn = stars > 0;
+
+    // The decoy burns down; while it lives, cruisers chase it.
+    if (this.decoy) {
+      this.decoy.t -= dt;
+      if (this.decoy.t <= 0) this.decoy = null;
+    }
+    const chaseX = this.decoy ? this.decoy.x : player.x;
+    const chaseZ = this.decoy ? this.decoy.z : player.z;
 
     // Heat decays while no unit can see Mara.
     const seen = this.cruisers.some((c) => dist2D(c.x, c.z, player.x, player.z) < 60)
@@ -174,17 +196,20 @@ export class Police {
 
     // Cruiser AI: chase, ram, and PIT when alongside. Roadblock cars
     // hold their ground — they are parked across the road on purpose.
+    // While a decoy is live, the cruisers chase the decoy instead.
     for (const c of this.cruisers) {
       if (c.wrecked || c.role === 'ROADBLOCK') continue;
-      const d = dist2D(c.x, c.z, player.x, player.z);
-      const wantHeading = Math.atan2(player.x - c.x, player.z - c.z);
+      const d = dist2D(c.x, c.z, chaseX, chaseZ);
+      const wantHeading = Math.atan2(chaseX - c.x, chaseZ - c.z);
       let diff = wantHeading - c.heading;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
       // Aim slightly ahead of a moving player to intercept.
       const steer = clamp(diff * 2.2, -1, 1);
       let throttle = 1;
-      if (d < 6 && playerCar) {
+      if (this.decoy) {
+        c.role = 'DECOY';
+      } else if (d < 6 && playerCar) {
         // Ram: full throttle into the player's flank.
         throttle = 1;
         c.role = 'RAMMING';
@@ -194,7 +219,7 @@ export class Police {
         c.role = 'INTERCEPT';
       }
       // Don't overshoot a stopped player: brake in close.
-      if (d < 4 && !playerCar) throttle = -1;
+      if (d < 4 && !playerCar && !this.decoy) throttle = -1;
       c.drive(throttle, steer, false, dt);
       c.sirenPhase += dt * 9;
       // Collision with the player's car.
@@ -228,7 +253,7 @@ export class Police {
     }
 
     // Busted: pinned at low speed with a cruiser on top of Mara.
-    if (stars > 0 && playerCar && Math.abs(playerCar.speed) < 1.5) {
+    if (stars > 0 && playerCar && Math.abs(playerCar.speed) < 1.5 && !this.decoy) {
       const close = this.cruisers.some((c) => !c.wrecked && dist2D(c.x, c.z, player.x, player.z) < 7);
       if (close) {
         this.bustedTimer += dt;
@@ -298,5 +323,6 @@ export class Police {
     this.roadblocks = [];
     this.heli.active = false;
     this.sirenOn = false;
+    this.decoy = null;
   }
 }

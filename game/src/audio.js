@@ -1,6 +1,8 @@
 // Sound: everything is synthesized with the Web Audio API — no audio
-// files, no network. A soft synth pad loops underneath (the "radio"),
-// and one-shot blips cover gunfire, sirens, pickups, crashes and the
+// files, no network. A soft synth pad loops underneath, the radio
+// module (radio.js) schedules procedural station music through the
+// shared AudioContext, and one-shot blips cover gunfire, sirens,
+// pickups, crashes, explosions, race countdowns and the
 // mission-complete jingle. All of it stays silent until the first user
 // gesture creates the AudioContext.
 
@@ -33,6 +35,15 @@ export class Audio {
     } catch {
       return false;
     }
+  }
+
+  // The radio module schedules its own notes through this context.
+  getContext() {
+    return this.ctx;
+  }
+
+  getMaster() {
+    return this.master;
   }
 
   setMuted(m) {
@@ -177,9 +188,20 @@ export class Audio {
     else this.noise(0.1, 0.18, 900);
   }
 
+  shotgunBlast() {
+    this.noise(0.28, 0.55, 800);
+    this.blip(70, 0.22, 'sawtooth', 0.3, 35);
+  }
+
   crash() {
     this.noise(0.25, 0.35, 500);
     this.blip(90, 0.2, 'sawtooth', 0.2, 40);
+  }
+
+  explosion() {
+    this.noise(0.7, 0.6, 300);
+    this.blip(55, 0.5, 'sawtooth', 0.35, 28);
+    setTimeout(() => this.noise(0.4, 0.3, 200), 120);
   }
 
   pickup() {
@@ -203,5 +225,27 @@ export class Audio {
 
   click() {
     this.blip(880, 0.05, 'sine', 0.12);
+  }
+
+  // Radio station jingle: a bright three-note sting on switch.
+  jingle() {
+    const notes = [784, 988, 1175];
+    notes.forEach((f, i) => setTimeout(() => this.blip(f, 0.12, 'triangle', 0.18), i * 90));
+  }
+
+  // Race countdown: low beep for 3-2-1, high beep for GO.
+  countBeep(go) {
+    this.blip(go ? 880 : 440, go ? 0.4 : 0.15, 'square', 0.22);
+  }
+
+  // Cash-register cha-ching for a garage purchase.
+  chaChing() {
+    this.blip(1319, 0.1, 'sine', 0.2);
+    setTimeout(() => this.blip(1568, 0.18, 'sine', 0.2), 90);
+  }
+
+  // Nitro hiss.
+  nitro() {
+    this.noise(0.35, 0.22, 2400);
   }
 }

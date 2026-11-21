@@ -1,11 +1,12 @@
 // Particles: a single dynamic point cloud for muzzle flashes, blood
-// puffs, car smoke, sparks, skid dust and pickup sparkles. One buffer,
-// one draw call, additive-ish plain rendering — cheap enough to leave
-// running through a whole chase.
+// puffs, car smoke, sparks, skid dust, pickup sparkles, tracers,
+// nitro flames and full explosions. One buffer, one draw call,
+// additive-ish plain rendering — cheap enough to leave running through
+// a whole chase.
 
 import { Builder } from './gl.js';
 
-const MAX = 420;
+const MAX = 640;
 
 export class Particles {
   constructor(gl) {
@@ -31,10 +32,23 @@ export class Particles {
     }
   }
 
-  muzzle(x, z, heading) {
+  muzzle(x, z, heading, size = 0.5, col = [1.0, 0.8, 0.25]) {
     const mx = x + Math.sin(heading) * 1.2;
     const mz = z + Math.cos(heading) * 1.2;
-    this.burst(mx, 1.3, mz, 4, 3, 0.12, 0.5, 1.0, 0.8, 0.25);
+    this.burst(mx, 1.3, mz, 4, 3, 0.12, size, col[0], col[1], col[2]);
+  }
+
+  // A glowing tracer line from the muzzle to the impact point: a row of
+  // small bright discs along the ray.
+  tracer(x1, y1, z1, x2, y2, z2, col = [1.0, 0.9, 0.5]) {
+    const steps = 10;
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      this.spawn(
+        x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, z1 + (z2 - z1) * t,
+        0, 0, 0, 0.14, 0.28, col[0], col[1], col[2],
+      );
+    }
   }
 
   blood(x, z) {
@@ -53,6 +67,21 @@ export class Particles {
       0.5, 0.9, 1.0, 0.55, 0.12);
   }
 
+  // A full car explosion: fireball, smoke column and flying sparks.
+  explosion(x, y, z) {
+    this.burst(x, y + 0.5, z, 26, 7, 0.7, 1.4, 1.0, 0.55, 0.12);
+    this.burst(x, y + 1, z, 14, 3, 1.8, 2.0, 0.25, 0.25, 0.26);
+    this.burst(x, y, z, 18, 9, 0.5, 0.4, 1.0, 0.9, 0.4);
+  }
+
+  // Blue-white nitro flames from the exhaust.
+  nitroFlame(x, y, z, heading) {
+    const bx = x - Math.sin(heading) * 2.4;
+    const bz = z - Math.cos(heading) * 2.4;
+    this.spawn(bx, y + 0.5, bz, -Math.sin(heading) * 4, 0.4, -Math.cos(heading) * 4,
+      0.25, 0.7, 0.45, 0.75, 1.0);
+  }
+
   sparks(x, z) {
     this.burst(x, 0.6, z, 10, 5, 0.4, 0.35, 1.0, 0.85, 0.3);
   }
@@ -64,6 +93,12 @@ export class Particles {
 
   sparkle(x, y, z) {
     this.burst(x, y, z, 12, 2, 0.8, 0.5, 1.0, 0.9, 0.35);
+  }
+
+  // Wake foam behind a boat.
+  wake(x, z) {
+    this.spawn(x, 0.3, z, (Math.random() - 0.5) * 1.2, 0.3, (Math.random() - 0.5) * 1.2,
+      0.9, 1.0, 0.85, 0.95, 1.0);
   }
 
   update(dt) {

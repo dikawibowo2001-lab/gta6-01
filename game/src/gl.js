@@ -304,6 +304,48 @@ export class Builder {
     }
   }
 
+  // A thin beam between two points (tracers, laser sights): a stretched
+  // box aligned along the XZ direction between the points.
+  beam(x1, y1, z1, x2, y2, z2, w, col) {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const dz = z2 - z1;
+    const len = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+    const mx = (x1 + x2) / 2;
+    const my = (y1 + y2) / 2;
+    const mz = (z1 + z2) / 2;
+    // Build the beam along +z in local space, then rotate: yaw first,
+    // then pitch. Rotation is applied by hand to the 8 corners.
+    const yaw = Math.atan2(dx, dz);
+    const pitch = Math.asin(Math.max(-1, Math.min(1, dy / len)));
+    const cy = Math.cos(yaw);
+    const sy = Math.sin(yaw);
+    const cp = Math.cos(pitch);
+    const sp = Math.sin(pitch);
+    const corners = [];
+    for (const sx of [-w / 2, w / 2]) {
+      for (const sz of [-len / 2, len / 2]) {
+        // Local point (sx, 0, sz) -> pitch about X, then yaw about Y.
+        const px = sx;
+        const py = -sz * sp;
+        const pz = sz * cp;
+        const wx = px * cy + pz * sy;
+        const wz = -px * sy + pz * cy;
+        corners.push([mx + wx, my + py, mz + wz]);
+      }
+    }
+    // Two vertical faces + top/bottom are overkill for a tracer; one
+    // vertical quad reads fine from the chase cam.
+    const [a, b, c, d] = corners;
+    const up = [0, w, 0];
+    const i0 = this.vert(a[0], a[1] - w / 2, a[2], 0, 0, 1, col[0], col[1], col[2]);
+    const i1 = this.vert(b[0], b[1] - w / 2, b[2], 0, 0, 1, col[0], col[1], col[2]);
+    const i2 = this.vert(d[0], d[1] + w / 2, d[2], 0, 0, 1, col[0], col[1], col[2]);
+    const i3 = this.vert(c[0], c[1] + w / 2, c[2], 0, 0, 1, col[0], col[1], col[2]);
+    this.quad(i0, i1, i2, i3);
+    void up;
+  }
+
   finish(gl) {
     return new Mesh(gl, this, this.lit);
   }
