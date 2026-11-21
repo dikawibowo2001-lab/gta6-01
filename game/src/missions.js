@@ -1,218 +1,232 @@
-// The story of Mara Vega, a getaway driver new to Solmar Bay, and the
-// four jobs The Harbor Crew gives her. Each mission is a small state
-// machine: stages with a marker, an objective line, and a reward. The
-// first job starts with a new game; later jobs start at the Hideout
-// marker, and a failed job can be retried from there.
-
-import { MISSION_REWARDS } from './config.js';
-import { createEnemy } from './combat.js';
-
-export const STORY_INTRO = 'Mara Vega rolled into Solmar Bay with an empty wallet and a reputation for out-driving anyone. The Harbor Crew — Reyes and his people — need a driver they can trust. Four jobs. Do them clean, and the bay is yours.';
+// The story: eight jobs for The Harbor Crew. Mara Vega, getaway
+// driver, runs work for Reyes and Juno while the Coral Kings try to
+// take her streets. Each job is a chain of stages — steal a car, drive
+// to a marker, clear the rivals, survive the heat — with dialogue at
+// every turn. The manager tracks the active job, its stage, its timers
+// and its payouts, and hands the HUD the objective text and the marker.
 
 export const MISSIONS = [
   {
-    title: 'First Wheels',
+    id: 'first-wheels',
+    name: 'First Wheels',
     giver: 'Reyes',
-    briefing: 'Every driver needs a ride, Mara. Borrow any car on the street — press E beside one — and bring it to Sunset Garage. The crew will make it yours.',
-    objective: ['Borrow any car (walk up and press E)', 'Drive it to Sunset Garage'],
+    reward: 200,
+    intro: ['Reyes', 'Mara. The crew needs wheels. Jack that Pelo GT on Strand Row and bring it to my garage. No scratches — well, fewer scratches.'],
+    stages: [
+      { type: 'steal', text: 'Steal the Rukan Pelo GT', target: 'sportsParked' },
+      { type: 'goto', text: 'Drive it to Reyes\u2019 garage', target: 'reyesGarage', marker: 'reyesGarage' },
+    ],
+    outro: ['Reyes', 'Clean work. The Harbor Crew just got faster.'],
   },
   {
-    title: 'Hot Delivery',
-    giver: 'Reyes',
-    briefing: 'A package is waiting at the Port Gate and a buyer downtown pays double if it arrives in 100 seconds. Drive like the bay is on fire — because the clock is.',
-    objective: ['Pick up the package at the Port Gate', 'Deliver it downtown before the timer runs out'],
-  },
-  {
-    title: 'Harbor Rescue',
+    id: 'hot-delivery',
+    name: 'Hot Delivery',
     giver: 'Juno',
-    briefing: 'Juno is pinned down at the port by the Coral Kings. Clear them out, get her in your car, and bring her home to the Hideout. Nobody in this crew gets left behind.',
-    objective: ['Reach the port', 'Clear out the Coral Kings', 'Pick up Juno', 'Drive Juno to the Hideout'],
+    reward: 350,
+    intro: ['Juno', 'Package for the marina, and the Coral Kings are watching the bridges. One hundred seconds. Drive like the tide is behind you.'],
+    stages: [
+      { type: 'goto', text: 'Pick up the package at the port gate', target: 'portGate', marker: 'portGate' },
+      { type: 'timed', text: 'Deliver to the marina before the timer runs out', target: 'marina', marker: 'marina', time: 100 },
+    ],
+    outro: ['Juno', 'Ninety seconds to spare. You drive like a rumor.'],
   },
   {
-    title: 'The Last Getaway',
+    id: 'harbor-rescue',
+    name: 'Harbor Rescue',
     giver: 'Reyes',
-    briefing: 'Solmar PD is all over us — three stars and climbing. Stay free for sixty seconds, then vanish into the Hideout. Pull this off and you are family.',
-    objective: ['Survive the heat for 60 seconds', 'Reach the Hideout'],
+    reward: 500,
+    intro: ['Reyes', 'Juno is pinned at the port — three Coral Kings on her. Clear them out and bring her home.'],
+    stages: [
+      { type: 'kill', text: 'Clear the 3 Coral Kings at the port', target: 'junoPickup', count: 3, marker: 'junoPickup' },
+      { type: 'goto', text: 'Pick up Juno and drive to the safehouse', target: 'safehouse', marker: 'safehouse' },
+    ],
+    outro: ['Juno', 'You came for me. The crew remembers that, Mara.'],
+  },
+  {
+    id: 'last-getaway',
+    name: 'The Last Getaway',
+    giver: 'Reyes',
+    reward: 800,
+    intro: ['Reyes', 'The SBPD knows your car now. Survive sixty seconds at three stars — then vanish.'],
+    stages: [
+      { type: 'survive', text: 'Survive 60 seconds under full pursuit', time: 60, stars: 3 },
+    ],
+    outro: ['Reyes', 'They lost you in the neon. Legend status.'],
+  },
+  {
+    id: 'coral-hit',
+    name: 'Coral Kings Hit',
+    giver: 'Juno',
+    reward: 650,
+    intro: ['Juno', 'A Kings convoy is rolling through Old Town. Hit the escort cars — all three — and the shipment is ours.'],
+    stages: [
+      { type: 'wreck', text: 'Wreck the 3 Kings escort cars', count: 3, marker: 'rivalCamp' },
+      { type: 'goto', text: 'Drive the shipment to the safehouse', target: 'safehouse', marker: 'safehouse' },
+    ],
+    outro: ['Juno', 'The Kings will think twice about our streets.'],
+  },
+  {
+    id: 'beachfront-run',
+    name: 'Beachfront Run',
+    giver: 'Reyes',
+    reward: 450,
+    intro: ['Reyes', 'A buyer waits on Kumala Strand. Beach road, top speed, eighty seconds. Try not to sand the paint.'],
+    stages: [
+      { type: 'timed', text: 'Reach the beach drop in 80 seconds', target: 'beachDrop', marker: 'beachDrop', time: 80 },
+    ],
+    outro: ['Reyes', 'On time, on the sand, on the money.'],
+  },
+  {
+    id: 'port-heist',
+    name: 'Port Heist',
+    giver: 'Juno',
+    reward: 900,
+    intro: ['Juno', 'A Hauler full of hardware sits in the port. Steal it, dodge the patrols, bring it to the garage. Big score, big heat.'],
+    stages: [
+      { type: 'steal', text: 'Steal the Hauler truck from the port', target: 'portTruck' },
+      { type: 'goto', text: 'Drive the Hauler to Reyes\u2019 garage', target: 'reyesGarage', marker: 'reyesGarage' },
+    ],
+    outro: ['Juno', 'Nine hundred dollars of hardware, zero receipts.'],
+  },
+  {
+    id: 'sun-sand-sirens',
+    name: 'Sun, Sand & Sirens',
+    giver: 'Reyes',
+    reward: 1500,
+    intro: ['Reyes', 'Last job, Mara. Five stars, the whole city on you. Lose them, reach the safehouse, and Solmar Bay is ours.'],
+    stages: [
+      { type: 'survive', text: 'Survive 75 seconds at 5 stars', time: 75, stars: 5 },
+      { type: 'goto', text: 'Lose the heat and reach the safehouse', target: 'safehouse', marker: 'safehouse' },
+    ],
+    outro: ['Reyes', 'Sun, sand and sirens — and you outran all three.'],
   },
 ];
 
-export function createMissionState() {
-  return {
-    index: 0, // 0..3: the next job; 4: all done
-    stage: 0,
-    state: 'idle', // idle | active | complete | failed
-    timer: 0,
-    completed: [false, false, false, false],
-    failed: false,
-  };
-}
-
-export function startMission(world, index) {
-  const mission = world.mission;
-  const idx = index ?? mission.index;
-  mission.index = idx;
-  mission.stage = 0;
-  mission.state = 'active';
-  mission.timer = 0;
-  mission.failed = false;
-  world.enemies = [];
-  world.juno = null;
-  const def = MISSIONS[idx];
-  world.banner = { text: `${def.title.toUpperCase()} — ${def.giver.toUpperCase()}`, color: '#ffd166', until: world.time + 3.5 };
-  world.briefing = { title: def.title, giver: def.giver, text: def.briefing, until: world.time + 6 };
-  if (idx === 3) {
-    world.wanted.heat = 300;
-    world.wanted.stars = 3;
-    if (world.audio) world.audio.siren(true);
+export class MissionManager {
+  constructor(spawns) {
+    this.spawns = spawns;
+    this.index = 0;
+    this.stage = 0;
+    this.active = false;
+    this.timer = 0;
+    this.kills = 0;
+    this.wrecks = 0;
+    this.completed = 0;
+    this.banner = null; // {title, sub, t}
+    this.dialogue = null; // {name, text, t}
+    this.justCompleted = null;
   }
-}
 
-export function missionMarker(world) {
-  const mission = world.mission;
-  const L = world.city.landmarks;
-  if (mission.state === 'idle') {
-    if (mission.index === -1) return null;
-    if (mission.index < 4 && !mission.completed[mission.index]) return { ...L.home, label: 'Next job — press E' };
+  get mission() {
+    return MISSIONS[this.index] || null;
+  }
+
+  get stageDef() {
+    const m = this.mission;
+    return m ? m.stages[this.stage] : null;
+  }
+
+  get stageLabel() {
+    const m = this.mission;
+    if (!m) return '';
+    return `STAGE ${this.stage + 1}/${m.stages.length}`;
+  }
+
+  get isDone() {
+    return this.index >= MISSIONS.length;
+  }
+
+  start() {
+    const m = this.mission;
+    if (!m || this.active) return;
+    this.active = true;
+    this.stage = 0;
+    this.kills = 0;
+    this.wrecks = 0;
+    this.timer = 0;
+    this.say(m.intro[0], m.intro[1]);
+  }
+
+  say(name, text, hold = 5) {
+    this.dialogue = { name, text, t: hold };
+  }
+
+  markerPos() {
+    const s = this.stageDef;
+    if (!s || !s.marker) return null;
+    const p = this.spawns[s.marker];
+    return p ? [p[0], p[1]] : null;
+  }
+
+  // One frame. Returns 'completed' | 'failed' | 'advanced' | null.
+  update(dt, world) {
+    if (this.banner) {
+      this.banner.t -= dt;
+      if (this.banner.t <= 0) this.banner = null;
+    }
+    if (this.dialogue) {
+      this.dialogue.t -= dt;
+      if (this.dialogue.t <= 0) this.dialogue = null;
+    }
+    if (!this.active || !this.mission) return null;
+    const s = this.stageDef;
+    const px = world.player.x;
+    const pz = world.player.z;
+    if (s.type === 'goto' || s.type === 'timed') {
+      const p = this.spawns[s.target];
+      if (s.type === 'timed') {
+        if (this.timer === 0) this.timer = s.time;
+        this.timer -= dt;
+        if (this.timer <= 0) {
+          this.fail(world, 'Out of time');
+          return 'failed';
+        }
+      }
+      if (p && Math.hypot(px - p[0], pz - p[1]) < 12) return this.advance(world);
+    } else if (s.type === 'steal') {
+      if (world.stolenTarget) return this.advance(world);
+    } else if (s.type === 'kill') {
+      if (this.kills >= s.count) return this.advance(world);
+    } else if (s.type === 'wreck') {
+      if (this.wrecks >= s.count) return this.advance(world);
+    } else if (s.type === 'survive') {
+      if (this.timer === 0) {
+        this.timer = s.time;
+        world.police.heat = Math.max(world.police.heat, (s.stars - 1) * 20 + 1);
+      }
+      this.timer -= dt;
+      if (this.timer <= 0) return this.advance(world);
+    }
     return null;
   }
-  if (mission.state !== 'active') return null;
-  const stage = mission.stage;
-  if (mission.index === 0) return stage === 0 ? null : { ...L.garage, label: 'Sunset Garage' };
-  if (mission.index === 1) return stage === 0 ? { ...L.portGate, label: 'Pick up the package' } : { ...L.downtown, label: 'Deliver downtown' };
-  if (mission.index === 2) {
-    if (stage === 0) return { ...L.portGate, label: 'The port' };
-    if (stage === 1) return { ...L.portGate, label: 'Clear the Kings' };
-    if (stage === 2 && world.juno) return { x: world.juno.x, y: world.juno.y, label: 'Juno' };
-    return { ...L.home, label: 'Hideout' };
-  }
-  if (mission.index === 3) return stage === 0 ? null : { ...L.home, label: 'Hideout' };
-  return null;
-}
 
-export function objectiveText(world) {
-  const mission = world.mission;
-  if (mission.state === 'idle') {
-    if (mission.index >= 4) return 'All jobs done — the bay is yours. Free roam!';
-    if (mission.index === -1) return '';
-    return `Next job: ${MISSIONS[mission.index].title} — drive to the Hideout and press E`;
-  }
-  if (mission.state !== 'active') return '';
-  const def = MISSIONS[mission.index];
-  let text = def.objective[mission.stage] || '';
-  if (mission.index === 1 && mission.stage === 1) text += ` — ${Math.max(0, Math.ceil(mission.timer))}s left`;
-  if (mission.index === 3 && mission.stage === 0) text += ` — ${Math.max(0, Math.ceil(mission.timer))}s left`;
-  return text;
-}
-
-export function completeMission(world) {
-  const mission = world.mission;
-  const reward = MISSION_REWARDS[mission.index];
-  mission.completed[mission.index] = true;
-  mission.state = 'complete';
-  world.cash += reward;
-  world.stats.cashEarned += reward;
-  world.stats.missionsDone += 1;
-  world.missionComplete = { title: MISSIONS[mission.index].title, reward, until: world.time + 4 };
-  if (world.audio) {
-    world.audio.missionComplete();
-    world.audio.cash();
-  }
-  mission.index += 1;
-  mission.stage = 0;
-  if (mission.index < 4) {
-    mission.state = 'idle';
-  }
-}
-
-export function failMission(world, reason) {
-  const mission = world.mission;
-  if (mission.state !== 'active') return;
-  mission.state = 'failed';
-  mission.failed = true;
-  world.banner = { text: `JOB FAILED — ${reason.toUpperCase()}`, color: '#ff4d4d', until: world.time + 3.5 };
-  if (world.audio) world.audio.missionFailed();
-  // The same job stays available at the Hideout marker.
-  mission.state = 'idle';
-}
-
-function near(world, point, radius) {
-  const player = world.player;
-  const x = player.car ? player.car.x : player.x;
-  const y = player.car ? player.car.y : player.y;
-  return Math.hypot(x - point.x, y - point.y) < radius;
-}
-
-export function updateMission(world, dt, actions) {
-  const mission = world.mission;
-  const L = world.city.landmarks;
-
-  // Starting the next job at the Hideout marker.
-  if (mission.state === 'idle' && mission.index >= 0 && mission.index < 4 && !mission.completed[mission.index]) {
-    if ((actions.start || actions.enter) && near(world, L.home, 90)) {
-      startMission(world, mission.index);
-      return;
+  advance(world) {
+    const m = this.mission;
+    this.stage += 1;
+    this.timer = 0;
+    if (this.stage >= m.stages.length) {
+      this.active = false;
+      this.completed += 1;
+      world.cash += m.reward;
+      world.xp += 400;
+      this.justCompleted = m;
+      this.banner = { title: 'JOB COMPLETE', sub: `${m.name}  +$${m.reward}`, t: 4 };
+      this.say(m.outro[0], m.outro[1], 6);
+      this.index += 1;
+      this.stage = 0;
+      world.audio.missionDone();
+      world.save();
+      return 'completed';
     }
+    return 'advanced';
   }
-  if (mission.state !== 'active') return;
 
-  const player = world.player;
-  if (mission.index === 0) {
-    if (mission.stage === 0 && player.car) mission.stage = 1;
-    else if (mission.stage === 1 && near(world, L.garage, 80)) completeMission(world);
-  } else if (mission.index === 1) {
-    if (mission.stage === 0) {
-      if (near(world, L.portGate, 80)) {
-        mission.stage = 1;
-        mission.timer = 100;
-        world.banner = { text: 'PACKAGE COLLECTED — 100 SECONDS!', color: '#ffd166', until: world.time + 2.5 };
-      }
-    } else {
-      mission.timer -= dt;
-      if (mission.timer <= 0) failMission(world, 'Out of time');
-      else if (near(world, L.downtown, 80)) completeMission(world);
-    }
-  } else if (mission.index === 2) {
-    if (mission.stage === 0) {
-      if (near(world, L.portGate, 140)) {
-        mission.stage = 1;
-        const rng = world.rng;
-        world.enemies = [
-          createEnemy(rng, L.portGate.x + 60, L.portGate.y - 40),
-          createEnemy(rng, L.portGate.x - 30, L.portGate.y + 90),
-          createEnemy(rng, L.portGate.x + 120, L.portGate.y + 60),
-        ];
-        world.juno = { x: L.portGate.x + 40, y: L.portGate.y + 140, boarded: false };
-        world.banner = { text: 'THE CORAL KINGS ARE HERE — FIGHT!', color: '#ff4d4d', until: world.time + 2.5 };
-      }
-    } else if (mission.stage === 1) {
-      if (world.enemies.length > 0 && world.enemies.every((e) => e.dead)) {
-        mission.stage = 2;
-        world.banner = { text: 'AREA CLEAR — GET JUNO', color: '#7bf1a8', until: world.time + 2.5 };
-      }
-    } else if (mission.stage === 2) {
-      if (world.juno && near(world, world.juno, 46)) {
-        world.juno.boarded = true;
-        mission.stage = 3;
-        world.banner = { text: 'JUNO IS WITH YOU — DRIVE HOME', color: '#7bf1a8', until: world.time + 2.5 };
-      }
-    } else if (mission.stage === 3) {
-      if (near(world, L.home, 90)) completeMission(world);
-    }
-    // Juno rides along once she boards.
-    if (world.juno && world.juno.boarded) {
-      world.juno.x = player.car ? player.car.x : player.x;
-      world.juno.y = player.car ? player.car.y : player.y + 24;
-    }
-  } else if (mission.index === 3) {
-    if (mission.stage === 0) {
-      if (mission.timer <= 0) mission.timer = 60;
-      mission.timer -= dt;
-      if (mission.timer <= 0) {
-        mission.stage = 1;
-        world.banner = { text: 'YOU OUTLASTED THEM — GET TO THE HIDEOUT', color: '#7bf1a8', until: world.time + 2.5 };
-      }
-    } else if (near(world, L.home, 90)) {
-      completeMission(world);
-    }
+  fail(world, reason) {
+    this.active = false;
+    this.stage = 0;
+    this.timer = 0;
+    this.banner = { title: 'JOB FAILED', sub: reason, t: 4 };
+    this.say('Reyes', 'That one slipped away. Shake it off — the next job is waiting.', 6);
+    world.audio.missionFail();
   }
 }

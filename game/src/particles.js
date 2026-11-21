@@ -1,96 +1,103 @@
-// Juice: short-lived particles (sparks, smoke, muzzle flashes, splashes),
-// floating damage numbers, and skid marks left by hard driving. None of
-// it affects the simulation; it only makes the city feel alive.
+// Particles: a single dynamic point cloud for muzzle flashes, blood
+// puffs, car smoke, sparks, skid dust and pickup sparkles. One buffer,
+// one draw call, additive-ish plain rendering — cheap enough to leave
+// running through a whole chase.
 
-export function createEffects() {
-  return { particles: [], texts: [], skids: [] };
-}
+import { Builder } from './gl.js';
 
-export function spawnParticles(fx, x, y, opts) {
-  const count = opts.count ?? 8;
-  for (let i = 0; i < count; i += 1) {
-    const angle = Math.random() * Math.PI * 2;
-    const speed = (opts.speed ?? 120) * (0.4 + Math.random() * 0.8);
-    fx.particles.push({
-      x,
-      y,
-      vx: Math.cos(angle) * speed + (opts.vx ?? 0),
-      vy: Math.sin(angle) * speed + (opts.vy ?? 0),
-      life: opts.life ?? 0.5,
-      maxLife: opts.life ?? 0.5,
-      size: (opts.size ?? 4) * (0.6 + Math.random() * 0.8),
-      color: opts.color ?? '#ffd166',
-      gravity: opts.gravity ?? 0,
-      drag: opts.drag ?? 2,
-    });
+const MAX = 420;
+
+export class Particles {
+  constructor(gl) {
+    this.gl = gl;
+    this.items = [];
+    this.mesh = null;
+    this.dirty = true;
+    this.builder = new Builder(false);
   }
-}
 
-export function spawnText(fx, x, y, text, color = '#ffffff') {
-  fx.texts.push({ x, y, text, color, life: 0.9, maxLife: 0.9 });
-}
+  spawn(x, y, z, vx, vy, vz, life, size, r, g, b) {
+    if (this.items.length >= MAX) this.items.shift();
+    this.items.push({ x, y, z, vx, vy, vz, life, maxLife: life, size, r, g, b });
+    this.dirty = true;
+  }
 
-export function addSkid(fx, x, y, angle) {
-  const last = fx.skids[fx.skids.length - 1];
-  if (last && Math.hypot(x - last.x, y - last.y) < 6) return;
-  fx.skids.push({ x, y, angle, life: 4 });
-  if (fx.skids.length > 220) fx.skids.splice(0, fx.skids.length - 220);
-}
-
-export function stepEffects(fx, dt) {
-  for (let i = fx.particles.length - 1; i >= 0; i -= 1) {
-    const p = fx.particles[i];
-    p.life -= dt;
-    if (p.life <= 0) {
-      fx.particles.splice(i, 1);
-      continue;
+  burst(x, y, z, n, speed, life, size, r, g, b) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const s = speed * (0.4 + Math.random() * 0.8);
+      this.spawn(x, y, z, Math.cos(a) * s, (Math.random() - 0.2) * speed * 0.7, Math.sin(a) * s,
+        life * (0.6 + Math.random() * 0.7), size * (0.7 + Math.random() * 0.6), r, g, b);
     }
-    p.vy += p.gravity * dt;
-    const drag = Math.max(0, 1 - p.drag * dt);
-    p.vx *= drag;
-    p.vy *= drag;
-    p.x += p.vx * dt;
-    p.y += p.vy * dt;
   }
-  for (let i = fx.texts.length - 1; i >= 0; i -= 1) {
-    const t = fx.texts[i];
-    t.life -= dt;
-    t.y -= 34 * dt;
-    if (t.life <= 0) fx.texts.splice(i, 1);
-  }
-  for (let i = fx.skids.length - 1; i >= 0; i -= 1) {
-    fx.skids[i].life -= dt;
-    if (fx.skids[i].life <= 0) fx.skids.splice(i, 1);
-  }
-}
 
-export function drawEffects(ctx, fx, camera) {
-  for (const s of fx.skids) {
-    ctx.save();
-    ctx.globalAlpha = Math.min(0.5, s.life / 4) * 0.6;
-    ctx.translate(s.x - camera.x, s.y - camera.y);
-    ctx.rotate(s.angle);
-    ctx.fillStyle = '#1c1a18';
-    ctx.fillRect(-7, -2, 14, 4);
-    ctx.restore();
+  muzzle(x, z, heading) {
+    const mx = x + Math.sin(heading) * 1.2;
+    const mz = z + Math.cos(heading) * 1.2;
+    this.burst(mx, 1.3, mz, 4, 3, 0.12, 0.5, 1.0, 0.8, 0.25);
   }
-  for (const p of fx.particles) {
-    ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
-    ctx.fillStyle = p.color;
-    ctx.beginPath();
-    ctx.arc(p.x - camera.x, p.y - camera.y, p.size * (0.5 + 0.5 * (p.life / p.maxLife)), 0, Math.PI * 2);
-    ctx.fill();
+
+  blood(x, z) {
+    this.burst(x, 1.1, z, 8, 2.5, 0.5, 0.45, 0.75, 0.1, 0.1);
   }
-  ctx.globalAlpha = 1;
-  ctx.textAlign = 'center';
-  for (const t of fx.texts) {
-    ctx.globalAlpha = Math.max(0, t.life / t.maxLife);
-    ctx.font = 'bold 15px Verdana, sans-serif';
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = '#111111';
-    ctx.strokeText(t.text, t.x - camera.x, t.y - camera.y);
-    ctx.fillStyle = t.color;
-    ctx.fillText(t.text, t.x - camera.x, t.y - camera.y);
+
+  smoke(x, y, z) {
+    this.spawn(x + (Math.random() - 0.5), y, z + (Math.random() - 0.5),
+      (Math.random() - 0.5) * 0.6, 1.6 + Math.random(), (Math.random() - 0.5) * 0.6,
+      1.4, 1.1, 0.32, 0.32, 0.34);
   }
-  ctx.globalAlpha = 1;
+
+  fire(x, y, z) {
+    this.spawn(x + (Math.random() - 0.5) * 0.8, y, z + (Math.random() - 0.5) * 0.8,
+      (Math.random() - 0.5) * 0.5, 2.2 + Math.random() * 1.4, (Math.random() - 0.5) * 0.5,
+      0.5, 0.9, 1.0, 0.55, 0.12);
+  }
+
+  sparks(x, z) {
+    this.burst(x, 0.6, z, 10, 5, 0.4, 0.35, 1.0, 0.85, 0.3);
+  }
+
+  skidDust(x, z) {
+    this.spawn(x, 0.3, z, (Math.random() - 0.5) * 1.5, 0.8, (Math.random() - 0.5) * 1.5,
+      0.7, 0.8, 0.75, 0.7, 0.6);
+  }
+
+  sparkle(x, y, z) {
+    this.burst(x, y, z, 12, 2, 0.8, 0.5, 1.0, 0.9, 0.35);
+  }
+
+  update(dt) {
+    let moved = false;
+    for (let i = this.items.length - 1; i >= 0; i--) {
+      const p = this.items[i];
+      p.life -= dt;
+      if (p.life <= 0) {
+        this.items.splice(i, 1);
+        moved = true;
+        continue;
+      }
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.z += p.vz * dt;
+      p.vy -= 1.5 * dt;
+      if (p.y < 0.15) p.y = 0.15;
+      moved = true;
+    }
+    if (moved) this.dirty = true;
+  }
+
+  // Rebuild the mesh only when something changed. Each particle is a
+  // camera-facing quad — approximated here as a small horizontal disc,
+  // which reads fine from the chase cam and costs no per-frame math.
+  rebuild() {
+    if (!this.dirty) return;
+    this.dirty = false;
+    const b = new Builder(false);
+    for (const p of this.items) {
+      const fade = p.life / p.maxLife;
+      const s = p.size * (0.5 + (1 - fade) * 0.8);
+      b.disc(p.x, Math.max(0.2, p.y), p.z, s, [p.r * fade + 0.05, p.g * fade + 0.05, p.b * fade + 0.05], 6);
+    }
+    this.mesh = b.finish(this.gl);
+  }
 }

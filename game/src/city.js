@@ -1,168 +1,253 @@
-// Solmar Bay itself: a seeded grid city with roads, blocks of buildings,
-// a park, a beach and sea along the south edge, and a container port in
-// the east. Also answers the collision questions the simulation asks:
-// what is solid, what is road, and where the roads run.
+// The city of Solmar Bay: a seeded grid of roads and blocks, a beach
+// and ocean to the east, a working port to the north-west, and a
+// downtown of glass towers at the centre. Everything static is baked
+// into two meshes (lit + plain) at build time, so the frame loop only
+// draws the moving parts.
+//
+// The city also owns the named spawn points every system shares: where
+// Mara starts, where Reyes' garage is, where the missions point.
 
-import { BEACH_TOP, PALETTE, PORT_LEFT, ROAD_WIDTH, ROAD_X, ROAD_Y, SEA_TOP, WORLD } from './config.js';
+import { Builder } from './gl.js';
+import { WORLD, PALETTE } from './config.js';
+import { makeRng, range, rangeInt, pick, chance } from './random.js';
 
-function rectsOverlap(a, b) {
-  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
-}
+export class City {
+  constructor(seed) {
+    this.seed = seed;
+    this.rng = makeRng(seed);
+    this.buildings = []; // {x, z, w, d, h} — for collision + minimap
+    this.palms = [];
+    this.lamps = [];
+    this.spawns = {
+      player: [-40, 40],
+      reyesGarage: [40, 200],
+      portGate: [-200, -280],
+      marina: [280, 280],
+      junoPickup: [-240, -240],
+      safehouse: [-120, 280],
+      rivalCamp: [-200, 200],
+      beachDrop: [340, 120],
+      portTruck: [-280, -200],
+      sportsParked: [120, 40],
+    };
+    this.build();
+  }
 
-export function generateCity(rng) {
-  const buildings = [];
-  const trees = [];
-  const containers = [];
-  const lanes = [];
+  build() {
+    const rng = this.rng;
+    const lit = new Builder(true);
+    const plain = new Builder(false);
+    const P = PALETTE;
+    const B = WORLD.bound;
 
-  // Road centre lines, for traffic waypoints and spawning.
-  for (const x of ROAD_X) lanes.push({ axis: 'v', at: x });
-  for (const y of ROAD_Y) lanes.push({ axis: 'h', at: y });
+    // Ground slab (grass) and the sand strip + sea.
+    lit.box(0, -0.6, 0, B * 2 + 200, 1, B * 2 + 200, P.grass);
+    lit.box((WORLD.sandX + WORLD.seaX) / 2 + 20, -0.4, 0, (WORLD.seaX - WORLD.sandX) + 40, 1, B * 2 + 200, P.sand);
+    // Sea: a big flat sheet, slightly glossy-looking via the plain pass.
+    plain.box(WORLD.seaX + 120, -0.2, 0, 260, 1, B * 2 + 200, P.sea);
+    // A lighter surf line where the waves break.
+    plain.box(WORLD.seaX - 2, 0.05, 0, 4, 0.2, B * 2 + 200, [0.75, 0.9, 0.95]);
 
-  // The block between each pair of neighbouring roads holds buildings,
-  // except the park block and the port strip.
-  const parkBlock = { x: 1310, y: 950, w: 300, h: 300 };
-  // The Hideout clearing: Mara's home turf stays free of buildings so
-  // she always spawns on open ground and the job marker stays reachable.
-  const homeClearing = { x: 630, y: 630, w: 200, h: 200 };
-  for (let ix = 0; ix < ROAD_X.length - 1; ix += 1) {
-    for (let iy = 0; iy < ROAD_Y.length - 1; iy += 1) {
-      const block = {
-        x: ROAD_X[ix] + ROAD_WIDTH / 2 + 14,
-        y: ROAD_Y[iy] + ROAD_WIDTH / 2 + 14,
-        w: ROAD_X[ix + 1] - ROAD_X[ix] - ROAD_WIDTH - 28,
-        h: ROAD_Y[iy] - ROAD_Y[iy] - ROAD_WIDTH - 28,
-      };
-      if (rectsOverlap(block, parkBlock)) {
-        for (let t = 0; t < 14; t += 1) {
-          trees.push({
-            x: rng.range(block.x + 16, block.x + block.w - 16),
-            y: rng.range(block.y + 16, block.y + block.h - 16),
-            r: rng.range(10, 16),
-          });
+    // Roads: dark strips on both axes, with centre dashes and edge lines.
+    for (const c of WORLD.grid) {
+      lit.box(c, 0.02, 0, WORLD.roadHalf * 2, 0.12, B * 2, P.asphalt);
+      lit.box(0, 0.02, c, B * 2, 0.12, WORLD.roadHalf * 2, P.asphalt);
+      for (let d = -B + 10; d < B - 10; d += 16) {
+        lit.box(c, 0.1, d, 0.7, 0.06, 6, P.linePaint);
+        lit.box(d, 0.1, c, 6, 0.06, 0.7, P.linePaint);
+      }
+    }
+
+    // Sidewalk skirts around every block.
+    for (const bx of WORLD.blocks) {
+      for (const bz of WORLD.blocks) {
+        if (bx > 240) continue; // beach blocks have no sidewalks
+        lit.box(bx, 0.06, bz, WORLD.blockSize + 12, 0.14, WORLD.blockSize + 12, P.walkway);
+      }
+    }
+
+    // Buildings: downtown gets one tall tower per block; every other
+    // block gets two or three smaller buildings, so the city passes
+    // a hundred rooftops. Downtown towers get glass tops; every tower
+    // gets rooftop props.
+    for (const bx of WORLD.blocks) {
+      for (const bz of WORLD.blocks) {
+        if (bx > 240) continue;
+        const downtown = Math.abs(bx) <= 80 && Math.abs(bz) <= 80;
+        const nearDowntown = Math.abs(bx) <= 160 && Math.abs(bz) <= 160;
+        const slots = downtown
+          ? [[0, 0]]
+          : chance(rng, 0.5)
+            ? [[-16, -16], [16, -16], [0, 16]]
+            : [[-14, -14], [14, 14]];
+        for (const [ox, oz] of slots) {
+          const w = downtown ? range(rng, 26, 34) : range(rng, 13, 22);
+          const d = downtown ? range(rng, 26, 34) : range(rng, 13, 22);
+          let h;
+          if (downtown) h = range(rng, 55, 110);
+          else if (nearDowntown) h = range(rng, 22, 48);
+          else h = range(rng, 10, 30);
+          const x = bx + ox;
+          const z = bz + oz;
+          const facade = pick(rng, P.facades);
+          lit.box(x, h / 2, z, w, h, d, facade);
+          // Roof slab + props (AC units, water tank, antenna).
+          lit.boxTop(x, h + 0.4, z, w + 1, 0.8, d + 1, facade, [0.32, 0.3, 0.3]);
+          if (chance(rng, 0.8)) lit.box(x + range(rng, -w / 4, w / 4), h + 1.6, z + range(rng, -d / 4, d / 4), 4, 2.4, 3, [0.45, 0.45, 0.46]);
+          if (chance(rng, 0.5)) lit.cylinder(x + range(rng, -w / 4, w / 4), h + 2.4, z + range(rng, -d / 4, d / 4), 1.8, 3.4, [0.6, 0.55, 0.5], 8);
+          if (chance(rng, 0.4)) lit.cylinder(x, h + 4, z, 0.25, 8, [0.3, 0.3, 0.32], 6);
+          if (downtown && chance(rng, 0.5)) {
+            // Glass crown on the tallest towers.
+            lit.box(x, h + 3, z, w * 0.5, 5, d * 0.5, [0.35, 0.55, 0.7]);
+          }
+          // Windows: lit and dark, stamped on all four faces.
+          const rows = Math.max(2, Math.floor(h / 7));
+          const colsX = Math.max(2, Math.floor(w / 5));
+          const colsZ = Math.max(2, Math.floor(d / 5));
+          for (let r = 0; r < rows; r++) {
+            const wy = 4 + r * 7;
+            for (let cxi = 0; cxi < colsX; cxi++) {
+              const wx = x - w / 2 + 3 + cxi * ((w - 6) / Math.max(1, colsX - 1));
+              const litWin = chance(rng, 0.45);
+              const col = litWin ? P.litWindow : P.darkWindow;
+              plain.face(wx, wy, z + d / 2 + 0.06, 0, 0, 1, 1, 0, 0, 0, 1, 0, 2.6, 3.6, col);
+              plain.face(wx, wy, z - d / 2 - 0.06, 0, 0, -1, -1, 0, 0, 0, 1, 0, 2.6, 3.6, col);
+            }
+            for (let czi = 0; czi < colsZ; czi++) {
+              const wz = z - d / 2 + 3 + czi * ((d - 6) / Math.max(1, colsZ - 1));
+              const litWin = chance(rng, 0.45);
+              const col = litWin ? P.litWindow : P.darkWindow;
+              plain.face(x + w / 2 + 0.06, wy, wz, 1, 0, 0, 0, 0, -1, 0, 1, 0, 2.6, 3.6, col);
+              plain.face(x - w / 2 - 0.06, wy, wz, -1, 0, 0, 0, 0, 1, 0, 1, 0, 2.6, 3.6, col);
+            }
+          }
+          this.buildings.push({ x, z, w, d, h });
         }
-        continue;
-      }
-      const downtown = ix >= 2 && ix <= 4 && iy >= 1 && iy <= 3;
-      const count = rng.int(1, downtown ? 2 : 4);
-      for (let n = 0; n < count; n += 1) {
-        const w = rng.range(60, downtown ? 130 : 100);
-        const h = rng.range(60, downtown ? 130 : 100);
-        const x = rng.range(block.x, Math.max(block.x + 1, block.x + block.w - w));
-        const y = rng.range(block.y, Math.max(block.y + 1, block.y + block.h - h));
-        const candidate = { x, y, w, h };
-        if (rectsOverlap(candidate, homeClearing)) continue;
-        if (buildings.some((b) => rectsOverlap(candidate, { x: b.x - 8, y: b.y - 8, w: b.w + 16, h: b.h + 16 }))) continue;
-        buildings.push({
-          ...candidate,
-          color: rng.pick(PALETTE.building),
-          roof: rng.pick(PALETTE.roof),
-          tall: downtown && rng.chance(0.6),
-          windows: rng.int(2, 5),
-        });
       }
     }
-  }
 
-  // Scattered palms along the beach and the park edge.
-  for (let t = 0; t < 26; t += 1) {
-    trees.push({ x: rng.range(60, WORLD.width - 60), y: rng.range(BEACH_TOP + 8, SEA_TOP - 30), r: rng.range(9, 14), palm: true });
-  }
-
-  // The port: rows of containers east of the last road.
-  for (let row = 0; row < 5; row += 1) {
-    for (let col = 0; col < 4; col += 1) {
-      if (rng.chance(0.25)) continue;
-      containers.push({
-        x: PORT_LEFT + 30 + col * 62,
-        y: 240 + row * 300 + rng.range(-8, 8),
-        w: 52,
-        h: 26,
-        color: rng.pick(PALETTE.container),
-      });
+    // Palms: along the beach, the marina, and scattered on blocks.
+    for (let z = -B + 20; z < B - 20; z += 26) {
+      this.addPalm(lit, WORLD.sandX + 8 + range(rng, -4, 10), z + range(rng, -6, 6), rng);
     }
+    for (let i = 0; i < 42; i++) {
+      const bx = pick(rng, WORLD.blocks);
+      const bz = pick(rng, WORLD.blocks);
+      if (bx > 240) continue;
+      this.addPalm(lit, bx + range(rng, -26, 26), bz + range(rng, -26, 26), rng);
+    }
+    for (let i = 0; i < 10; i++) {
+      this.addPalm(lit, range(rng, 200, 300), range(rng, 220, 320), rng);
+    }
+
+    // Streetlights along the main roads.
+    for (const c of WORLD.grid) {
+      for (let d = -B + 20; d < B - 20; d += 80) {
+        const lx = c + WORLD.roadHalf + 2;
+        lit.cylinder(lx, 4, d, 0.25, 8, [0.25, 0.25, 0.28], 6);
+        lit.box(lx - 1.2, 8, d, 2.6, 0.3, 0.3, [0.25, 0.25, 0.28]);
+        plain.box(lx - 2.2, 7.8, d, 1.2, 0.5, 0.6, [1.0, 0.9, 0.6]);
+        this.lamps.push([lx, d]);
+        lit.cylinder(d, 4, c + WORLD.roadHalf + 2, 0.25, 8, [0.25, 0.25, 0.28], 6);
+        lit.box(d, 8, c + WORLD.roadHalf + 0.8, 0.3, 0.3, 2.6, [0.25, 0.25, 0.28]);
+        plain.box(d, 7.8, c + WORLD.roadHalf - 0.2, 0.6, 0.5, 1.2, [1.0, 0.9, 0.6]);
+      }
+    }
+
+    // The port: cranes, container stacks, a warehouse row.
+    const portX = -280;
+    const portZ = -280;
+    for (let i = 0; i < 3; i++) {
+      const cx = portX + i * 55;
+      const cz = portZ + 20;
+      lit.box(cx, 18, cz, 5, 36, 5, P.cranePaint);
+      lit.box(cx + 12, 36, cz, 30, 3, 3, P.cranePaint);
+      lit.box(cx - 8, 36, cz, 14, 3, 3, P.cranePaint);
+      lit.cylinder(cx + 24, 30, cz, 0.3, 12, [0.2, 0.2, 0.22], 6);
+      lit.box(cx + 24, 24, cz, 4, 3, 4, [0.25, 0.25, 0.26]);
+    }
+    for (let i = 0; i < 26; i++) {
+      const x = portX - 40 + range(rng, 0, 150);
+      const z = portZ - 60 + range(rng, 0, 90);
+      const col = pick(rng, P.boxColors);
+      const stack = rangeInt(rng, 1, 3);
+      for (let s = 0; s < stack; s++) {
+        lit.boxTop(x, 1.6 + s * 3.2, z, 12, 3, 5, col, [col[0] * 0.85, col[1] * 0.85, col[2] * 0.85]);
+      }
+    }
+    lit.box(portX - 20, 6, portZ + 80, 60, 12, 24, [0.7, 0.68, 0.62]);
+    lit.box(portX + 60, 6, portZ + 80, 60, 12, 24, [0.66, 0.64, 0.6]);
+
+    // Marina: a pier + moored boats.
+    for (let i = 0; i < 5; i++) {
+      const px = 300 + i * 18;
+      lit.box(px, 0.8, 300, 10, 1.4, 60, [0.55, 0.45, 0.32]);
+      lit.box(px, 1.6, 322, 6, 2.4, 14, pick(rng, [[0.9, 0.9, 0.92], [0.2, 0.5, 0.8], [0.8, 0.3, 0.2]]));
+    }
+
+    // A park in the middle of town: trees + a fountain disc.
+    for (let i = 0; i < 12; i++) {
+      const x = range(rng, -60, 60);
+      const z = range(rng, -60, 60);
+      lit.cylinder(x, 2.5, z, 0.5, 5, P.trunk, 7);
+      lit.cone(x, 8, z, 4.5, 7, [0.2, 0.5, 0.25], 8);
+    }
+    lit.cylinder(0, 0.6, 0, 8, 1.2, [0.6, 0.62, 0.66], 16);
+    plain.disc(0, 1.25, 0, 7, [0.4, 0.75, 0.9], 20);
+
+    // Neon signs on a few downtown towers (plain pass = unlit glow).
+    const signCols = [[1.0, 0.3, 0.6], [0.3, 0.9, 1.0], [1.0, 0.7, 0.2], [0.6, 1.0, 0.4]];
+    for (let i = 0; i < 8; i++) {
+      const b = this.buildings[Math.floor(rng() * this.buildings.length)];
+      if (!b || b.h < 30) continue;
+      plain.face(b.x, b.h * 0.7, b.z + b.d / 2 + 0.12, 0, 0, 1, 1, 0, 0, 0, 1, 0, 10, 2.4, pick(rng, signCols));
+    }
+
+    this.litBuilder = lit;
+    this.plainBuilder = plain;
   }
 
-  // Landmarks the story and the missions point at.
-  const landmarks = {
-    home: { x: 700, y: 700, label: 'Hideout' },
-    garage: { x: 380, y: 1780, label: 'Sunset Garage' },
-    hospital: { x: 2360, y: 380, label: 'Bay General' },
-    policeStation: { x: 1640, y: 1640, label: 'Solmar PD' },
-    portGate: { x: 2820, y: 920, label: 'Port Gate' },
-    downtown: { x: 1280, y: 920, label: 'Downtown' },
-    marina: { x: 920, y: 2060, label: 'Marina' },
-  };
+  addPalm(lit, x, z, rng) {
+    const h = range(rng, 7, 11);
+    const lean = range(rng, -0.12, 0.12);
+    lit.cylinder(x, h / 2, z, 0.35, h, PALETTE.trunk, 7);
+    const topX = x + lean * h;
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + rng() * 0.5;
+      const fx = topX + Math.cos(a) * 2.2;
+      const fz = z + Math.sin(a) * 2.2;
+      lit.cone(fx, h + 0.6, fz, 1.1, 3.4, PALETTE.frond, 5);
+    }
+    lit.cone(topX, h + 1.4, z, 1.6, 2.6, PALETTE.frond, 6);
+    this.palms.push([x, z]);
+  }
 
-  function onRoad(x, y) {
-    for (const rx of ROAD_X) if (Math.abs(x - rx) <= ROAD_WIDTH / 2) return true;
-    for (const ry of ROAD_Y) if (Math.abs(y - ry) <= ROAD_WIDTH / 2) return true;
+  finish(gl) {
+    this.litMesh = this.litBuilder.finish(gl);
+    this.plainMesh = this.plainBuilder.finish(gl);
+    this.litBuilder = null;
+    this.plainBuilder = null;
+  }
+
+  // Push a walker out of building footprints (cheap AABB resolve).
+  collide(x, z, radius) {
+    for (const b of this.buildings) {
+      const dx = x - b.x;
+      const dz = z - b.z;
+      const px = b.w / 2 + radius - Math.abs(dx);
+      const pz = b.d / 2 + radius - Math.abs(dz);
+      if (px > 0 && pz > 0) {
+        if (px < pz) x = b.x + (dx > 0 ? b.w / 2 + radius : -b.w / 2 - radius);
+        else z = b.z + (dz > 0 ? b.d / 2 + radius : -b.d / 2 - radius);
+      }
+    }
+    return [x, z];
+  }
+
+  insideBuilding(x, z) {
+    for (const b of this.buildings) {
+      if (Math.abs(x - b.x) < b.w / 2 + 1 && Math.abs(z - b.z) < b.d / 2 + 1) return true;
+    }
     return false;
   }
-
-  function inWater(x, y) {
-    return y >= SEA_TOP;
-  }
-
-  function inBuilding(x, y, pad = 0) {
-    for (const b of buildings) {
-      if (x >= b.x - pad && x <= b.x + b.w + pad && y >= b.y - pad && y <= b.y + b.h + pad) return b;
-    }
-    return null;
-  }
-
-  // Solid for walking and driving: buildings, containers, the sea, the edge.
-  function solidAt(x, y, pad = 0) {
-    if (x < 8 || y < 8 || x > WORLD.width - 8 || y > WORLD.height - 8) return true;
-    if (inWater(x, y)) return true;
-    if (inBuilding(x, y, pad)) return true;
-    for (const c of containers) {
-      if (x >= c.x - pad && x <= c.x + c.w + pad && y >= c.y - pad && y <= c.y + c.h + pad) return true;
-    }
-    return false;
-  }
-
-  // A random point on a road, for spawning traffic and parked cars.
-  function randomRoadPoint(r) {
-    if (r.chance(0.5)) {
-      return { x: r.pick(ROAD_X) + r.range(-20, 20), y: r.range(120, 2060) };
-    }
-    return { x: r.range(120, 2820), y: r.pick(ROAD_Y) + r.range(-20, 20) };
-  }
-
-  // The nearest road point to (x, y): traffic steers toward these.
-  function nearestRoadPoint(x, y) {
-    let best = null;
-    let bestD = Infinity;
-    for (const rx of ROAD_X) {
-      const d = Math.abs(x - rx);
-      if (d < bestD) {
-        bestD = d;
-        best = { x: rx, y };
-      }
-    }
-    for (const ry of ROAD_Y) {
-      const d = Math.abs(y - ry);
-      if (d < bestD) {
-        bestD = d;
-        best = { x, y: ry };
-      }
-    }
-    return best;
-  }
-
-  return {
-    buildings,
-    trees,
-    containers,
-    lanes,
-    landmarks,
-    parkBlock,
-    onRoad,
-    inWater,
-    inBuilding,
-    solidAt,
-    randomRoadPoint,
-    nearestRoadPoint,
-  };
 }

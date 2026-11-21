@@ -1,148 +1,149 @@
-// The people of Solmar Bay: Mara Vega, the player, and the pedestrians
-// who stroll the sidewalks, chat, and run for cover when things get loud.
+// Walkers: Mara, the pedestrians on the sidewalks, the foot cops and
+// the Coral Kings rivals. A walker is a position, a heading, a walk
+// cycle and a health pool; the renderer draws them as low-poly figures
+// (torso, head, legs that swing with the stride).
 
-import { PLAYER } from './config.js';
+import { clamp, dist2D } from './math3.js';
+import { WORLD } from './config.js';
+import { makeRng, range, pick } from './random.js';
 
-const SHIRTS = ['#e63946', '#457b9d', '#2a9d8f', '#f4a261', '#e9c46a', '#9b5de5', '#f15bb5', '#00bbf9'];
-const SKINS = ['#f1c27d', '#e0ac69', '#c68642', '#8d5524', '#ffdbac'];
+const SKINS = [
+  [0.85, 0.65, 0.5], [0.6, 0.42, 0.3], [0.45, 0.3, 0.22], [0.95, 0.8, 0.68],
+];
+const SHIRTS = [
+  [0.9, 0.2, 0.25], [0.2, 0.5, 0.9], [0.95, 0.85, 0.2], [0.3, 0.8, 0.4],
+  [0.9, 0.5, 0.1], [0.6, 0.2, 0.7], [0.9, 0.9, 0.92], [0.15, 0.15, 0.18],
+];
+const PANTS = [
+  [0.2, 0.25, 0.45], [0.35, 0.3, 0.25], [0.5, 0.5, 0.55], [0.15, 0.35, 0.2],
+];
 
-export function createPlayer(x, y) {
-  return {
-    x, y,
-    angle: -Math.PI / 2,
-    hp: PLAYER.maxHp,
-    maxHp: PLAYER.maxHp,
-    armor: 0,
-    ammo: PLAYER.magSize,
-    reloading: 0,
-    shootCd: 0,
-    punchCd: 0,
-    car: null,
-    moving: false,
-    sprinting: false,
-    walkPhase: 0,
-  };
+export class Walker {
+  constructor(x, z, heading, role) {
+    this.x = x;
+    this.z = z;
+    this.heading = heading;
+    this.role = role; // 'player' | 'ped' | 'cop' | 'rival'
+    this.hp = 100;
+    this.armour = 0;
+    this.speed = 0; // current ground speed
+    this.walkPhase = Math.random() * Math.PI * 2;
+    this.moving = false;
+    this.dead = false;
+    this.inCar = false;
+    this.car = null;
+    this.skin = pick(Math.random, SKINS);
+    this.shirt = pick(Math.random, SHIRTS);
+    this.pants = pick(Math.random, PANTS);
+    // Per-walker wander state (peds).
+    this.wanderTarget = null;
+    this.wanderTimer = 0;
+    this.fleeTimer = 0;
+    this.shootTimer = 0;
+    this.isPlayer = false;
+  }
+
+  get alive() {
+    return !this.dead && this.hp > 0;
+  }
+
+  damage(amount) {
+    let rest = amount;
+    if (this.armour > 0) {
+      const soaked = Math.min(this.armour, rest * 0.6);
+      this.armour -= soaked;
+      rest -= soaked;
+    }
+    this.hp -= rest;
+    if (this.hp <= 0) {
+      this.hp = 0;
+      this.dead = true;
+    }
+    return this.dead;
+  }
+
+  // Move toward a target at `speed`, turning smoothly. Returns true on
+  // arrival (within `arrive` units).
+  stepToward(tx, tz, speed, dt, arrive = 1.5) {
+    const dx = tx - this.x;
+    const dz = tz - this.z;
+    const d = Math.sqrt(dx * dx + dz * dz);
+    if (d < arrive) {
+      this.moving = false;
+      this.speed = 0;
+      return true;
+    }
+    const want = Math.atan2(dx, dz);
+    let diff = want - this.heading;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    this.heading += clamp(diff, -6 * dt, 6 * dt);
+    this.x += Math.sin(this.heading) * speed * dt;
+    this.z += Math.cos(this.heading) * speed * dt;
+    this.speed = speed;
+    this.moving = true;
+    this.walkPhase += dt * speed * 1.6;
+    return false;
+  }
 }
 
-export function createPed(rng, x, y) {
-  return {
-    x, y,
-    angle: rng.range(0, Math.PI * 2),
-    speed: rng.range(28, 52),
-    shirt: rng.pick(SHIRTS),
-    skin: rng.pick(SKINS),
-    target: null,
-    wait: rng.range(0, 3),
-    state: 'walk', // walk | flee | down
-    fleeTimer: 0,
-    walkPhase: rng.range(0, Math.PI * 2),
-    down: false,
-  };
-}
-
-export function spawnPeds(city, rng, count) {
+// Pedestrian crowd: walkers on the sidewalks, wandering between random
+// block corners, fleeing when shots ring out nearby.
+export function spawnPeds(city, count, seed) {
+  const rng = makeRng(seed);
   const peds = [];
   let guard = 0;
-  while (peds.length < count && guard < count * 40) {
-    guard += 1;
-    const x = rng.range(120, 2820);
-    const y = rng.range(120, 2080);
-    if (city.solidAt(x, y, 4)) continue;
-    if (city.onRoad(x, y)) continue;
-    peds.push(createPed(rng, x, y));
+  while (peds.length < count && guard++ < count * 40) {
+    const bx = pick(rng, WORLD.blocks);
+    const bz = pick(rng, WORLD.blocks);
+    if (bx > 240) continue;
+    const x = bx + range(rng, -30, 30);
+    const z = bz + range(rng, -30, 30);
+    if (city.insideBuilding(x, z)) continue;
+    const p = new Walker(x, z, range(rng, 0, Math.PI * 2), 'ped');
+    p.skin = pick(rng, SKINS);
+    p.shirt = pick(rng, SHIRTS);
+    p.pants = pick(rng, PANTS);
+    peds.push(p);
   }
   return peds;
 }
 
-// Walk the player on foot, sliding along walls instead of sticking.
-export function stepPlayerOnFoot(player, move, dt, city, sprinting) {
-  const speed = sprinting ? PLAYER.sprintSpeed : PLAYER.walkSpeed;
-  const dx = move.x * speed * dt;
-  const dy = move.y * speed * dt;
-  player.moving = Math.abs(dx) + Math.abs(dy) > 0.01;
-  player.sprinting = sprinting && player.moving;
-  if (player.moving) player.walkPhase += dt * (sprinting ? 14 : 9);
-  if (dx !== 0 && !city.solidAt(player.x + dx, player.y, PLAYER.radius)) player.x += dx;
-  if (dy !== 0 && !city.solidAt(player.x, player.y + dy, PLAYER.radius)) player.y += dy;
-  player.x = Math.max(12, Math.min(3188, player.x));
-  player.y = Math.max(12, Math.min(2388, player.y));
-}
-
-function pickStrollTarget(ped, city, rng) {
-  for (let tries = 0; tries < 12; tries += 1) {
-    const x = ped.x + rng.range(-260, 260);
-    const y = ped.y + rng.range(-260, 260);
-    if (x < 60 || y < 60 || x > 2840 || y > 2100) continue;
-    if (city.solidAt(x, y, 4)) continue;
-    if (city.onRoad(x, y)) continue;
-    return { x, y };
-  }
-  return null;
-}
-
-export function stepPeds(peds, dt, city, rng, threat) {
-  for (const ped of peds) {
-    if (ped.down) continue;
-    if (ped.state === 'flee') {
-      ped.fleeTimer -= dt;
-      if (ped.fleeTimer <= 0) {
-        ped.state = 'walk';
-        ped.target = null;
-      }
-    } else if (threat) {
-      const d = Math.hypot(ped.x - threat.x, ped.y - threat.y);
-      if (d < threat.radius) {
-        ped.state = 'flee';
-        ped.fleeTimer = 3 + Math.random() * 2;
-        const away = Math.atan2(ped.y - threat.y, ped.x - threat.x);
-        ped.target = {
-          x: ped.x + Math.cos(away) * 320,
-          y: ped.y + Math.sin(away) * 320,
-        };
-      }
+// One frame of pedestrian behaviour: wander, or run from a scare point.
+export function updatePeds(peds, city, scare, dt, rng) {
+  for (const p of peds) {
+    if (!p.alive) continue;
+    if (scare && dist2D(p.x, p.z, scare[0], scare[1]) < 26) {
+      p.fleeTimer = 3;
     }
-    if (!ped.target) {
-      ped.wait -= dt;
-      if (ped.wait <= 0) {
-        ped.target = pickStrollTarget(ped, city, rng);
-        ped.wait = rng.range(1, 4);
-      } else {
-        continue;
-      }
-    }
-    if (!ped.target) continue;
-    const dx = ped.target.x - ped.x;
-    const dy = ped.target.y - ped.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist < 8) {
-      ped.target = null;
+    if (p.fleeTimer > 0) {
+      p.fleeTimer -= dt;
+      const away = Math.atan2(p.x - scare[0], p.z - scare[1]);
+      p.heading = away;
+      p.x += Math.sin(away) * 7.5 * dt;
+      p.z += Math.cos(away) * 7.5 * dt;
+      p.moving = true;
+      p.speed = 7.5;
+      p.walkPhase += dt * 12;
+      const c = city.collide(p.x, p.z, 0.7);
+      p.x = c[0];
+      p.z = c[1];
       continue;
     }
-    const speed = ped.state === 'flee' ? ped.speed * 2.6 : ped.speed;
-    const step = Math.min(dist, speed * dt);
-    const nx = ped.x + (dx / dist) * step;
-    const ny = ped.y + (dy / dist) * step;
-    if (!city.solidAt(nx, ny, 8)) {
-      ped.x = nx;
-      ped.y = ny;
-      ped.angle = Math.atan2(dy, dx);
-      ped.walkPhase += dt * (ped.state === 'flee' ? 16 : 8);
-    } else {
-      ped.target = null;
+    p.wanderTimer -= dt;
+    if (!p.wanderTarget || p.wanderTimer <= 0) {
+      const bx = pick(rng, WORLD.blocks);
+      const bz = pick(rng, WORLD.blocks);
+      if (bx > 240) continue;
+      p.wanderTarget = [bx + range(rng, -28, 28), bz + range(rng, -28, 28)];
+      p.wanderTimer = range(rng, 6, 14);
     }
-  }
-}
-
-// Everyone near a gunshot or a crash drops what they are doing and runs.
-export function scarePeds(peds, x, y, radius) {
-  for (const ped of peds) {
-    if (ped.down) continue;
-    const d = Math.hypot(ped.x - x, ped.y - y);
-    if (d < radius && ped.state !== 'flee') {
-      ped.state = 'flee';
-      ped.fleeTimer = 3 + Math.random() * 2;
-      const away = Math.atan2(ped.y - y, ped.x - x);
-      ped.target = { x: ped.x + Math.cos(away) * 320, y: ped.y + Math.sin(away) * 320 };
+    if (p.wanderTarget) {
+      const arrived = p.stepToward(p.wanderTarget[0], p.wanderTarget[1], 2.2, dt, 2);
+      if (arrived) p.wanderTarget = null;
+      const c = city.collide(p.x, p.z, 0.7);
+      p.x = c[0];
+      p.z = c[1];
     }
   }
 }

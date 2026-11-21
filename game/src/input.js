@@ -1,116 +1,93 @@
-// Keyboard and mouse state, read once per frame. Held keys steer the
-// player; one-shot actions (confirm, pause, enter car, help, mute, restart)
-// are queued as bits and consumed by the loop so a single press never
-// fires twice.
+// Input: keyboard state with edge-triggered "just pressed" keys, plus
+// the mouse (position, buttons, and the aim vector the combat uses).
+// The game reads this once per frame; endFrame() clears the edges.
 
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
-export const ACTION_HELP = 4;
-export const ACTION_MUTE = 8;
-export const ACTION_RESTART = 16;
-export const ACTION_ENTER = 32;
+export class Input {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.keys = new Set();
+    this.pressed = new Set();
+    this.mouseX = window.innerWidth / 2;
+    this.mouseY = window.innerHeight / 2;
+    this.mouseDown = false;
+    this.mousePressed = false;
+    this.locked = false;
 
-const MOVE_KEYS = {
-  KeyW: [0, -1], ArrowUp: [0, -1],
-  KeyS: [0, 1], ArrowDown: [0, 1],
-  KeyA: [-1, 0], ArrowLeft: [-1, 0],
-  KeyD: [1, 0], ArrowRight: [1, 0],
-};
-
-export function createInput(canvas) {
-  const keys = new Set();
-  let queued = 0;
-  const mouse = { x: 0, y: 0, down: false, clicked: false };
-
-  function onKeyDown(event) {
-    if (event.repeat) return;
-    keys.add(event.code);
-    if (event.code === 'Enter' || event.code === 'Space') queued |= ACTION_CONFIRM;
-    if (event.code === 'KeyP' || event.code === 'Escape') queued |= ACTION_PAUSE;
-    if (event.code === 'KeyH') queued |= ACTION_HELP;
-    if (event.code === 'KeyM') queued |= ACTION_MUTE;
-    if (event.code === 'KeyR') queued |= ACTION_RESTART;
-    if (event.code === 'KeyE') queued |= ACTION_ENTER;
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(event.code)) {
-      event.preventDefault();
-    }
-  }
-
-  function onKeyUp(event) {
-    keys.delete(event.code);
-  }
-
-  function onMouseMove(event) {
-    const rect = canvas.getBoundingClientRect();
-    mouse.x = event.clientX - rect.left;
-    mouse.y = event.clientY - rect.top;
-  }
-
-  function onMouseDown(event) {
-    onMouseMove(event);
-    mouse.down = true;
-    mouse.clicked = true;
-    if (event.button === 0) queued |= ACTION_CONFIRM;
-  }
-
-  function onMouseUp() {
-    mouse.down = false;
-  }
-
-  function onBlur() {
-    keys.clear();
-    mouse.down = false;
-  }
-
-  window.addEventListener('keydown', onKeyDown);
-  window.addEventListener('keyup', onKeyUp);
-  window.addEventListener('blur', onBlur);
-  canvas.addEventListener('mousemove', onMouseMove);
-  canvas.addEventListener('mousedown', onMouseDown);
-  window.addEventListener('mouseup', onMouseUp);
-
-  return {
-    mouse,
-    takeActions() {
-      const actions = queued;
-      queued = 0;
-      const wasClicked = mouse.clicked;
-      mouse.clicked = false;
-      return { actions, clicked: wasClicked };
-    },
-    moveVector() {
-      let x = 0;
-      let y = 0;
-      for (const code of keys) {
-        const dir = MOVE_KEYS[code];
-        if (dir) {
-          x += dir[0];
-          y += dir[1];
-        }
+    window.addEventListener('keydown', (e) => {
+      if (e.repeat) return;
+      this.keys.add(e.code);
+      this.pressed.add(e.code);
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) {
+        e.preventDefault();
       }
-      const len = Math.hypot(x, y);
-      if (len > 1) {
-        x /= len;
-        y /= len;
+    });
+    window.addEventListener('keyup', (e) => {
+      this.keys.delete(e.code);
+    });
+    window.addEventListener('blur', () => {
+      this.keys.clear();
+    });
+    canvas.addEventListener('mousemove', (e) => {
+      this.mouseX = e.clientX;
+      this.mouseY = e.clientY;
+    });
+    canvas.addEventListener('mousedown', (e) => {
+      if (e.button === 0) {
+        this.mouseDown = true;
+        this.mousePressed = true;
       }
-      return { x, y };
-    },
-    isDown(code) {
-      return keys.has(code);
-    },
-    sprinting() {
-      return keys.has('ShiftLeft') || keys.has('ShiftRight');
-    },
-    handbrake() {
-      return keys.has('Space');
-    },
-    destroy() {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-      window.removeEventListener('blur', onBlur);
-      canvas.removeEventListener('mousemove', onMouseMove);
-      canvas.removeEventListener('mousedown', onMouseDown);
-      window.removeEventListener('mouseup', onMouseUp);
-    },
-  };
+    });
+    window.addEventListener('mouseup', (e) => {
+      if (e.button === 0) this.mouseDown = false;
+    });
+    document.addEventListener('pointerlockchange', () => {
+      this.locked = document.pointerLockElement === canvas;
+    });
+  }
+
+  down(code) {
+    return this.keys.has(code);
+  }
+
+  justPressed(code) {
+    return this.pressed.has(code);
+  }
+
+  // The driving axes: throttle -1..1, steer -1..1.
+  get throttle() {
+    let t = 0;
+    if (this.down('KeyW') || this.down('ArrowUp')) t += 1;
+    if (this.down('KeyS') || this.down('ArrowDown')) t -= 1;
+    return t;
+  }
+
+  get steer() {
+    let s = 0;
+    if (this.down('KeyA') || this.down('ArrowLeft')) s -= 1;
+    if (this.down('KeyD') || this.down('ArrowRight')) s += 1;
+    return s;
+  }
+
+  get run() {
+    return this.down('ShiftLeft') || this.down('ShiftRight');
+  }
+
+  get handbrake() {
+    return this.down('Space');
+  }
+
+  endFrame() {
+    this.pressed.clear();
+    this.mousePressed = false;
+  }
+
+  // Test helper: pretend a key is held, for the play-test.
+  testHold(code) {
+    this.keys.add(code);
+    this.pressed.add(code);
+  }
+
+  testRelease(code) {
+    this.keys.delete(code);
+  }
 }

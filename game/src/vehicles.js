@@ -1,180 +1,150 @@
-// Cars: arcade driving with acceleration, steering that bites with
-// speed, handbrake slides, damage, smoke, and collisions with buildings,
-// other cars and the sea wall. One model serves parked cars, traffic,
-// police cruisers and whatever Mara is driving.
+// Cars: arcade physics on the road grid — accelerate, brake, steer
+// with speed-sensitive grip, skid a little at speed, take damage and
+// smoke when hurt. A car is driven by the player, by traffic AI, by the
+// police, or by nobody (parked, waiting to be stolen).
 
-import { CARS, ROAD_X } from './config.js';
-import { addSkid, spawnParticles } from './particles.js';
+import { clamp, damp, dist2D } from './math3.js';
+import { CAR_TYPES, WORLD } from './config.js';
+import { pick } from './random.js';
 
-const PAINT = ['#c1121f', '#1d3557', '#f4d35e', '#2a9d8f', '#e07a5f', '#6d6875', '#f8f9fa', '#14213d', '#ff6d00', '#3a86ff'];
-const POLICE_PAINT = '#f1faee';
+let nextId = 1;
 
-export function createCar(rng, x, y, angle, type, role) {
-  const spec = CARS[type];
-  return {
-    x, y, angle,
-    speed: 0,
-    type,
-    role, // parked | traffic | police | player
-    color: type === 'police' ? POLICE_PAINT : rng.pick(PAINT),
-    health: spec.health,
-    maxHealth: spec.health,
-    length: spec.length,
-    width: spec.width,
-    smoked: false,
-    dead: false,
-    waypoint: null,
-    waitAtLight: 0,
-    sirenPhase: rng.range(0, Math.PI * 2),
-  };
-}
-
-export function spawnParkedCars(city, rng, count) {
-  const cars = [];
-  let guard = 0;
-  while (cars.length < count && guard < count * 60) {
-    guard += 1;
-    const spot = city.randomRoadPoint(rng);
-    // Parked along the road they sit on, so a stolen car drives away
-    // down the street instead of straight into the nearest building.
-    const vertical = ROAD_X.some((rx) => Math.abs(spot.x - rx) < 30);
-    const angle = vertical
-      ? (rng.chance(0.5) ? Math.PI / 2 : -Math.PI / 2)
-      : (rng.chance(0.5) ? 0 : Math.PI);
-    const x = spot.x + (vertical ? rng.range(-26, 26) : 0);
-    const y = spot.y + (vertical ? 0 : rng.range(-26, 26));
-    if (city.solidAt(x, y, 20)) continue;
-    if (cars.some((c) => Math.hypot(c.x - x, c.y - y) < 70)) continue;
-    const type = rng.pick(['sedan', 'sedan', 'sports', 'taxi', 'truck']);
-    cars.push(createCar(rng, x, y, angle, type, 'parked'));
+export class Car {
+  constructor(type, color, x, z, heading) {
+    this.id = nextId++;
+    this.type = type;
+    this.spec = CAR_TYPES[type];
+    this.name = this.spec.name;
+    this.color = color;
+    this.x = x;
+    this.z = z;
+    this.heading = heading;
+    this.speed = 0; // signed, units/sec, forward positive
+    this.steer = 0; // -1..1, smoothed
+    this.condition = 100;
+    this.driver = null; // null = parked, 'player', 'traffic', 'police', 'rival'
+    this.callsign = null;
+    this.role = null;
+    this.sirenPhase = Math.random() * Math.PI * 2;
+    this.brakeLights = false;
+    this.handbrake = false;
+    this.dead = false;
+    this.wrecked = false;
+    // Traffic-AI state.
+    this.route = null;
+    this.routeIdx = 0;
+    this.waitTimer = 0;
   }
-  return cars;
-}
 
-function samplePoints(car) {
-  const cos = Math.cos(car.angle);
-  const sin = Math.sin(car.angle);
-  const half = car.length / 2 - 4;
-  return [
-    { x: car.x + cos * half, y: car.y + sin * half },
-    { x: car.x, y: car.y },
-    { x: car.x - cos * half, y: car.y - sin * half },
-  ];
-}
-
-// One arcade physics step. `drive` is { throttle: -1..1, steer: -1..1,
-// handbrake: bool }. Returns true when the car hit something hard.
-export function stepCar(car, drive, dt, city, fx, audio) {
-  if (car.dead) return false;
-  const spec = CARS[car.type];
-  const forward = drive.throttle;
-  const grip = drive.handbrake ? spec.grip * 0.35 : spec.grip;
-
-  if (forward > 0) car.speed += spec.accel * forward * dt;
-  else if (forward < 0) {
-    if (car.speed > 20) car.speed -= spec.accel * 1.6 * dt; // braking
-    else car.speed += spec.accel * 0.55 * forward * dt; // reversing
+  get top() {
+    return this.spec.top * (this.condition < 35 ? 0.6 : 1);
   }
-  // Rolling drag and sand drag.
-  const onSand = car.y > 2120;
-  car.speed -= car.speed * (onSand ? 1.4 : 0.35) * dt;
-  car.speed = Math.max(-spec.reverseMax, Math.min(spec.maxSpeed, car.speed));
 
-  // Steering only bites while moving; handbrake lets the tail step out.
-  const speedFactor = Math.min(1, Math.abs(car.speed) / 160);
-  const steerRate = spec.turn * speedFactor * (car.speed < 0 ? -1 : 1);
-  car.angle += drive.steer * steerRate * dt * (drive.handbrake ? 1.5 : 1);
-
-  const cos = Math.cos(car.angle);
-  const sin = Math.sin(car.angle);
-  const lateral = -Math.sin(car.angle);
-  const lateralY = Math.cos(car.angle);
-  // Velocity is mostly along the nose, with a little sideways slide.
-  const slide = Math.max(0, 1 - grip * dt);
-  if (car.slideX === undefined) {
-    car.slideX = 0;
-    car.slideY = 0;
+  damage(amount) {
+    this.condition -= amount;
+    if (this.condition <= 0) {
+      this.condition = 0;
+      this.wrecked = true;
+      this.speed = 0;
+    }
+    return this.wrecked;
   }
-  const vx = cos * car.speed + car.slideX * slide;
-  const vy = sin * car.speed + car.slideY * slide;
-  car.slideX = vx - cos * car.speed;
-  car.slideY = vy - sin * car.speed;
 
-  const nx = car.x + vx * dt;
-  const ny = car.y + vy * dt;
-  const probe = { ...car, x: nx, y: ny };
-  let hit = false;
-  for (const p of samplePoints(probe)) {
-    if (city.solidAt(p.x, p.y, 6)) {
-      hit = true;
-      break;
+  get smoking() {
+    return this.condition < 45 && !this.wrecked;
+  }
+
+  get burning() {
+    return this.condition < 18 && !this.wrecked;
+  }
+
+  // Drive with throttle (-1 reverse .. 1 full), steering (-1..1) and a
+  // handbrake flag. Arcade model: heading follows steering faster at
+  // speed, grip bleeds off in a handbrake slide.
+  drive(throttle, steering, handbrake, dt) {
+    if (this.wrecked) return;
+    const spec = this.spec;
+    this.steer = damp(this.steer, steering, 8, dt);
+    this.handbrake = handbrake;
+    const grip = handbrake ? spec.grip * 0.45 : spec.grip;
+    const spd = Math.abs(this.speed);
+    const turnRate = grip * clamp(spd / 10, 0.25, 1);
+    this.heading += this.steer * turnRate * dt * (this.speed < 0 ? -1 : 1);
+    if (throttle > 0) {
+      this.speed += spec.accel * throttle * dt;
+      this.brakeLights = false;
+    } else if (throttle < 0) {
+      if (this.speed > 0.5) {
+        this.speed -= spec.brake * dt;
+        this.brakeLights = true;
+      } else {
+        this.speed += spec.accel * 0.45 * throttle * dt; // reverse
+        this.brakeLights = false;
+      }
+    } else {
+      this.speed = damp(this.speed, 0, 0.6, dt);
+      this.brakeLights = false;
+    }
+    if (handbrake) {
+      this.speed = damp(this.speed, 0, 2.2, dt);
+    }
+    this.speed = clamp(this.speed, -spec.top * 0.4, this.top);
+    this.x += Math.sin(this.heading) * this.speed * dt;
+    this.z += Math.cos(this.heading) * this.speed * dt;
+    // Soft world bounds: the city edge pushes back.
+    const B = WORLD.bound;
+    if (Math.abs(this.x) > B) {
+      this.x = Math.sign(this.x) * B;
+      this.speed *= 0.4;
+    }
+    if (Math.abs(this.z) > B) {
+      this.z = Math.sign(this.z) * B;
+      this.speed *= 0.4;
     }
   }
-  if (hit) {
-    const impact = Math.abs(car.speed);
-    if (impact > 140) {
-      damageCar(car, impact * 0.06, fx);
-      if (audio) audio.crash();
-      if (fx) spawnParticles(fx, car.x, car.y, { count: 8, color: '#ffd166', speed: 160, life: 0.4, size: 4 });
+
+  // Simple circle collision with another car: both take a little damage
+  // and bounce apart.
+  collideWith(other) {
+    const d = dist2D(this.x, this.z, other.x, other.z);
+    const min = this.type === 'truck' ? 5.2 : 4.2;
+    if (d > min || d === 0) return false;
+    const nx = (this.x - other.x) / d;
+    const nz = (this.z - other.z) / d;
+    const push = (min - d) / 2 + 0.05;
+    this.x += nx * push;
+    this.z += nz * push;
+    other.x -= nx * push;
+    other.z -= nz * push;
+    const impact = Math.abs(this.speed - other.speed);
+    if (impact > 4) {
+      this.damage(impact * 0.55);
+      other.damage(impact * 0.55);
+      this.speed *= 0.55;
+      other.speed *= 0.55;
     }
-    car.speed *= -0.25;
-    car.slideX *= -0.3;
-    car.slideY *= -0.3;
-  } else {
-    car.x = nx;
-    car.y = ny;
-  }
-
-  // Skid marks when sliding hard or handbrake-turning at speed.
-  const sliding = Math.hypot(car.slideX, car.slideY);
-  if (fx && (sliding > 90 || (drive.handbrake && Math.abs(car.speed) > 160))) {
-    addSkid(fx, car.x - cos * (car.length / 2 - 6), car.y - sin * (car.length / 2 - 6), car.angle);
-  }
-  if (car.health < car.maxHealth * 0.35 && !car.smoked) {
-    car.smoked = true;
-  }
-  return hit;
-}
-
-export function damageCar(car, amount, fx) {
-  if (car.dead) return;
-  car.health -= amount;
-  if (car.health <= 0) {
-    car.health = 0;
-    car.dead = true;
-    car.speed = 0;
-    if (fx) {
-      spawnParticles(fx, car.x, car.y, { count: 26, color: '#ff6b35', speed: 220, life: 0.9, size: 7 });
-      spawnParticles(fx, car.x, car.y, { count: 14, color: '#555555', speed: 60, life: 1.6, size: 9 });
-    }
-  }
-}
-
-// Push two overlapping cars apart and trade some speed; returns true on hit.
-export function collideCars(a, b, fx, audio) {
-  if (a.dead || b.dead) return false;
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const dist = Math.hypot(dx, dy);
-  const minDist = (a.length + b.length) / 2 - 14;
-  if (dist >= minDist || dist === 0) return false;
-  const push = (minDist - dist) / 2;
-  const nx = dx / dist;
-  const ny = dy / dist;
-  a.x -= nx * push;
-  a.y -= ny * push;
-  b.x += nx * push;
-  b.y += ny * push;
-  const closing = Math.abs(a.speed - b.speed);
-  const exchange = (a.speed + b.speed) / 2;
-  a.speed = exchange * 0.6;
-  b.speed = exchange * 0.6;
-  if (closing > 120) {
-    damageCar(a, closing * 0.03, fx);
-    damageCar(b, closing * 0.03, fx);
-    if (audio) audio.crash();
-    if (fx) spawnParticles(fx, (a.x + b.x) / 2, (a.y + b.y) / 2, { count: 10, color: '#ffd166', speed: 180, life: 0.4, size: 4 });
     return true;
   }
-  return false;
+}
+
+// Parked cars: a few beauties left around the city for Mara to steal,
+// including the hero sports car for mission one.
+export function spawnParked(rng) {
+  const out = [];
+  const spots = [
+    ['sports', 120, 40, Math.PI / 2],
+    ['sedan', -40, 120, 0],
+    ['suv', 200, -120, Math.PI],
+    ['taxi', 40, -200, Math.PI / 2],
+    ['sedan', -200, 40, Math.PI / 2],
+    ['sports', 280, 200, 0],
+    ['truck', -280, -200, Math.PI / 2],
+    ['sedan', 120, 280, Math.PI],
+  ];
+  for (const [type, x, z, h] of spots) {
+    const c = new Car(type, pick(rng, CAR_TYPES[type].paint), x, z, h);
+    c.driver = null;
+    out.push(c);
+  }
+  return out;
 }

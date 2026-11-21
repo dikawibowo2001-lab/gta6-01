@@ -1,80 +1,126 @@
-// Solmar Bay — tuning, world dimensions and the sun-soaked palette.
-// Every number the game balances on lives here so the other modules read
-// it instead of hiding magic constants in their own logic.
+// Solmar Bay — Sun, Sand & Sirens (3D, v2.1)
+// One place for every number the game agrees on: the city grid, the
+// golden-hour palette, the six car types, the wanted ladder and the
+// economy. The modules import from here so the world stays consistent.
 
-export const STEP = 1 / 60;
-export const SAVE_KEY = 'solmar-bay-save-v1';
-
-// The city, in world pixels. Roads run on a grid inside these bounds.
-export const WORLD = { width: 3200, height: 2400 };
-export const ROAD_WIDTH = 76;
-export const ROAD_X = [200, 560, 920, 1280, 1640, 2000, 2360, 2720];
-export const ROAD_Y = [200, 560, 920, 1280, 1640, 2000];
-
-// South edge: sand, then sea. East edge: the port.
-export const BEACH_TOP = 2120;
-export const SEA_TOP = 2280;
-export const PORT_LEFT = 2880;
-
-// On foot.
-export const PLAYER = {
-  radius: 13,
-  walkSpeed: 165,
-  sprintSpeed: 250,
-  maxHp: 100,
-  maxArmor: 100,
-  magSize: 12,
-  reloadTime: 1.1,
-  shootCooldown: 0.22,
-  punchCooldown: 0.45,
-  punchRange: 34,
-  punchDamage: 18,
+export const WORLD = {
+  bound: 430, // soft edge of the playable city
+  roadHalf: 7, // half-width of a road surface
+  grid: [-280, -200, -120, -40, 40, 120, 200, 280], // road centre lines
+  blocks: [-240, -160, -80, 0, 80, 160, 240], // block centres between roads
+  blockSize: 64,
+  sandX: 316, // the beach begins here
+  seaX: 396, // the ocean begins here
 };
 
-// Cars: arcade handling, one model for every type with per-type tuning.
-export const CARS = {
-  sedan: { length: 52, width: 26, accel: 420, maxSpeed: 520, reverseMax: 180, turn: 2.6, grip: 6.5, health: 100 },
-  sports: { length: 50, width: 25, accel: 560, maxSpeed: 680, reverseMax: 200, turn: 3.0, grip: 7.5, health: 80 },
-  taxi: { length: 52, width: 26, accel: 400, maxSpeed: 500, reverseMax: 180, turn: 2.6, grip: 6.5, health: 100 },
-  truck: { length: 64, width: 30, accel: 300, maxSpeed: 400, reverseMax: 150, turn: 2.1, grip: 5.5, health: 160 },
-  police: { length: 54, width: 27, accel: 520, maxSpeed: 620, reverseMax: 200, turn: 2.9, grip: 7.0, health: 140 },
-};
-
-export const TRAFFIC_COUNT = 14;
-export const PED_COUNT = 26;
-export const PARKED_COUNT = 18;
-
-// Wanted level: heat thresholds, how fast it cools, and the bust rules.
-export const WANTED = {
-  heatPerStar: 100,
-  decayDelay: 12, // seconds out of every cop's sight before heat starts falling
-  decayRate: 12, // heat per second while hidden
-  bustRange: 46,
-  bustTime: 2.2, // seconds a cop must stand next to a slow player to bust them
-  bustFine: 150,
-  wastedFine: 200,
-};
-
-// Mission rewards, in order.
-export const MISSION_REWARDS = [200, 350, 500, 800];
-
-// The clock: the city starts mid-morning and the light warms toward dusk.
-export const DAY_START_MINUTES = 10 * 60;
-export const MINUTES_PER_SECOND = 0.5;
-
+// Golden hour over a Caribbean-style coast: the sun hangs low in the
+// west, the sky burns rose-orange, the sea goes teal.
 export const PALETTE = {
-  grass: '#7fb069',
-  grassDark: '#6da25a',
-  sidewalk: '#cfc4ae',
-  road: '#3d3a38',
-  roadEdge: '#2e2b29',
-  lane: '#e8d44d',
-  sand: '#ecd9a0',
-  sea: '#2e86ab',
-  seaDeep: '#1d6a8a',
-  building: ['#e8b4b8', '#f4d58d', '#8ecae6', '#ffb703', '#c77dff', '#90be6d', '#f9c74f', '#e07a5f'],
-  roof: ['#b56576', '#6d6875', '#355070', '#7f5539', '#4a4e69'],
-  park: '#5d9c59',
-  portGround: '#9a8c98',
-  container: ['#e63946', '#457b9d', '#2a9d8f', '#f4a261', '#6d6875'],
+  skyTop: [0.32, 0.46, 0.76],
+  skyMid: [0.99, 0.6, 0.4],
+  skyLow: [1.0, 0.8, 0.58],
+  sunTint: [1.0, 0.8, 0.52],
+  sunDir: [-0.58, 0.42, -0.32],
+  fog: [0.97, 0.64, 0.46],
+  fogNear: 110,
+  fogFar: 540,
+  ambient: [0.58, 0.52, 0.5],
+  grass: [0.4, 0.54, 0.3],
+  asphalt: [0.15, 0.15, 0.17],
+  linePaint: [0.88, 0.82, 0.62],
+  walkway: [0.56, 0.53, 0.48],
+  sand: [0.95, 0.83, 0.6],
+  sea: [0.08, 0.44, 0.6],
+  facades: [
+    [0.86, 0.73, 0.61],
+    [0.79, 0.67, 0.59],
+    [0.91, 0.81, 0.69],
+    [0.71, 0.63, 0.61],
+    [0.83, 0.71, 0.56],
+    [0.66, 0.61, 0.63],
+    [0.88, 0.76, 0.72],
+  ],
+  litWindow: [1.0, 0.86, 0.46],
+  darkWindow: [0.24, 0.34, 0.44],
+  trunk: [0.46, 0.33, 0.21],
+  frond: [0.16, 0.52, 0.24],
+  cranePaint: [0.96, 0.62, 0.16],
+  boxColors: [
+    [0.82, 0.26, 0.21],
+    [0.21, 0.46, 0.76],
+    [0.26, 0.66, 0.36],
+    [0.91, 0.71, 0.21],
+    [0.61, 0.36, 0.66],
+  ],
 };
+
+// Six stealable car types. Arcade handling: top speed, acceleration,
+// grip (how eagerly the nose follows the wheel) and braking.
+export const CAR_TYPES = {
+  sedan: { name: 'Meridian GT', top: 33, accel: 15, grip: 2.5, brake: 29, paint: [[0.76, 0.11, 0.13], [0.11, 0.26, 0.61], [0.86, 0.86, 0.86], [0.14, 0.14, 0.15]] },
+  sports: { name: 'Rukan Pelo GT', top: 47, accel: 25, grip: 3.5, brake: 35, paint: [[1.0, 0.46, 0.16], [0.96, 0.86, 0.11], [0.11, 0.71, 0.71], [0.61, 0.11, 0.51]] },
+  suv: { name: 'Bison XL', top: 29, accel: 12, grip: 2.1, brake: 25, paint: [[0.21, 0.21, 0.23], [0.76, 0.76, 0.73], [0.31, 0.41, 0.21]] },
+  taxi: { name: 'Solmar Cab', top: 31, accel: 14, grip: 2.4, brake: 29, paint: [[0.96, 0.76, 0.11]] },
+  truck: { name: 'Hauler 6T', top: 23, accel: 8, grip: 1.7, brake: 21, paint: [[0.86, 0.86, 0.86], [0.21, 0.51, 0.81]] },
+  police: { name: 'SBPD Interceptor', top: 43, accel: 23, grip: 3.3, brake: 37, paint: [[0.09, 0.09, 0.11]] },
+};
+
+// The wanted ladder: heat 0–100 maps to stars; each star brings more
+// cruisers, then foot cops, then the helicopter, then roadblocks.
+export const WANTED = {
+  cruisersByStar: [0, 2, 3, 4, 5, 6],
+  footCopsAt: 2,
+  heliAt: 3,
+  roadblockAt: 4,
+  heatLoss: 0.5, // heat shed per second while no cop can see Mara
+  heatFor: { steal: 22, kill: 45, shoot: 12, hitPed: 30, hitCop: 40, speed: 0.4 },
+  bustedWait: 3.0, // seconds pinned before the busted screen
+  finePerStar: 150,
+};
+
+export const ECONOMY = {
+  startCash: 100,
+  pickupCash: 50,
+  finePerStar: 150,
+};
+
+export const DISTRICTS = [
+  { name: 'Downtown', x0: -160, z0: -160, x1: 160, z1: 160 },
+  { name: 'Portside', x0: -430, z0: -430, x1: -200, z1: -200 },
+  { name: 'Harbor', x0: -200, z0: -430, x1: 200, z1: -200 },
+  { name: 'Kumala Strand', x0: 280, z0: -430, x1: 430, z1: 430 },
+  { name: 'Old Town', x0: -430, z0: 200, x1: -160, z1: 430 },
+  { name: 'Marina', x0: 160, z0: 200, x1: 430, z1: 430 },
+  { name: 'Little Havana', x0: -430, z0: -200, x1: -160, z1: 200 },
+  { name: 'Sunset Hills', x0: 160, z0: -200, x1: 280, z1: 200 },
+];
+
+export function districtAt(x, z) {
+  for (const d of DISTRICTS) {
+    if (x >= d.x0 && x < d.x1 && z >= d.z0 && z < d.z1) return d.name;
+  }
+  return 'Solmar Bay';
+}
+
+// SBPD callsigns for the dispatch panel.
+export const CALLSIGNS = [
+  'KITE-1', 'MARLIN-3', 'CORAL-48', 'CORAL-85', 'CORAL-43', 'SIERRA-12',
+  'TANGO-7', 'PELICAN-11', 'GECKO-25', 'BARRACUDA-18', 'TAC-45', 'CONDOR-1',
+  'VIPER-9', 'HAMMER-4', 'FALCON-2', 'ORCA-6', 'HAWK-21', 'REBEL-8',
+];
+
+export const RADIO = [
+  { name: 'SOLMAR 98.4', track: 'Island Pop — Marisol Reyes' },
+  { name: 'CELESTE 98.1', track: 'Malecon Mirage — Vela Roja' },
+  { name: 'KUMALA FM', track: 'Neon Palms — The Drifters' },
+  { name: 'HARBOR ROCK', track: 'Harbor Lights — Coral Kings' },
+];
+
+export const RANKS = [
+  { xp: 0, name: 'ROOKIE' },
+  { xp: 400, name: 'DRIVER' },
+  { xp: 1000, name: 'WHEELMAN' },
+  { xp: 2000, name: 'FIXER' },
+  { xp: 3500, name: 'SHOT CALLER' },
+  { xp: 6000, name: 'LEGEND' },
+];

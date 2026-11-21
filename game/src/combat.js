@@ -1,229 +1,152 @@
-// Combat: the pistol, the punch, the rival crew that shoots back, and
-// the pickups scattered around the city — health kits, armour vests and
-// loose cash. Bullets fly straight, hit walls, cars, people and the
-// player, and leave a spark where they land.
+// Combat: Mara's fists, pistol and SMG, plus the shots NPCs fire back.
+// Shooting is a hitscan ray from Mara toward the mouse aim point: the
+// renderer turns the screen-space crosshair into a world direction, and
+// this module finds the first walker or car the ray crosses.
 
-import { PLAYER } from './config.js';
-import { damageCar } from './vehicles.js';
-import { scarePeds } from './entities.js';
-import { spawnParticles, spawnText } from './particles.js';
+import { dist2D, clamp } from './math3.js';
 
-export function createEnemy(rng, x, y) {
-  return {
-    x, y,
-    angle: 0,
-    hp: 60,
-    speed: rng.range(120, 150),
-    shootCd: rng.range(0.6, 1.6),
-    state: 'guard',
-    target: null,
-    walkPhase: 0,
-    dead: false,
-  };
-}
+export const WEAPONS = {
+  fists: { name: 'FISTS', damage: 12, range: 3.2, rate: 0.45, mag: Infinity, auto: false, spread: 0 },
+  pistol: { name: 'PISTOL', damage: 34, range: 60, rate: 0.28, mag: 12, auto: false, spread: 0.012 },
+  smg: { name: 'SMG', damage: 20, range: 48, rate: 0.09, mag: 30, auto: true, spread: 0.035 },
+};
 
-export function spawnPickups(city, rng) {
-  const pickups = [];
-  const kinds = ['health', 'armor', 'cash', 'health', 'cash', 'armor', 'health', 'cash'];
-  let guard = 0;
-  for (const kind of kinds) {
-    guard = 0;
-    while (guard < 60) {
-      guard += 1;
-      const x = rng.range(140, 2800);
-      const y = rng.range(140, 2060);
-      if (city.solidAt(x, y, 6) || city.onRoad(x, y)) continue;
-      pickups.push({ x, y, kind, bob: rng.range(0, Math.PI * 2), taken: false });
-      break;
+const WEAPON_ORDER = ['fists', 'pistol', 'smg'];
+
+export class Combat {
+  constructor() {
+    this.current = 'pistol';
+    this.ammo = { pistol: 12, smg: 30 };
+    this.reserve = { pistol: 96, smg: 150 };
+    this.cooldown = 0;
+    this.reloading = 0;
+    this.reloadTotal = 0;
+    this.muzzleFlash = 0;
+    this.lastShotFrom = null;
+    this.lastShotTo = null;
+  }
+
+  get weapon() {
+    return WEAPONS[this.current];
+  }
+
+  get ammoText() {
+    if (this.current === 'fists') return '—';
+    if (this.reloading > 0) return 'RELOAD';
+    return `${this.ammo[this.current]} / ${this.reserve[this.current]}`;
+  }
+
+  select(name) {
+    if (WEAPONS[name]) {
+      this.current = name;
+      this.reloading = 0;
     }
   }
-  return pickups;
-}
 
-export function shoot(world, from, angle, owner, damage) {
-  world.bullets.push({
-    x: from.x + Math.cos(angle) * 22,
-    y: from.y + Math.sin(angle) * 22,
-    vx: Math.cos(angle) * 900,
-    vy: Math.sin(angle) * 900,
-    owner,
-    damage,
-    life: 1.1,
-  });
-  spawnParticles(world.fx, from.x + Math.cos(angle) * 24, from.y + Math.sin(angle) * 24, {
-    count: 4, color: '#ffe66d', speed: 140, life: 0.12, size: 3,
-  });
-}
-
-function bulletHitsCircle(b, x, y, r) {
-  return Math.hypot(b.x - x, b.y - y) < r;
-}
-
-export function stepBullets(world, dt) {
-  const player = world.player;
-  for (let i = world.bullets.length - 1; i >= 0; i -= 1) {
-    const b = world.bullets[i];
-    b.life -= dt;
-    b.x += b.vx * dt;
-    b.y += b.vy * dt;
-    let dead = b.life <= 0;
-    if (!dead && world.city.solidAt(b.x, b.y, 0)) {
-      spawnParticles(world.fx, b.x, b.y, { count: 4, color: '#cccccc', speed: 120, life: 0.25, size: 3 });
-      dead = true;
-    }
-    if (!dead && b.owner !== 'player') {
-      // Enemy and cop bullets can only hurt the player on foot.
-      if (!player.car && bulletHitsCircle(b, player.x, player.y, 14)) {
-        hurtPlayer(world, b.damage);
-        dead = true;
-      }
-    }
-    if (!dead && b.owner === 'player') {
-      for (const enemy of world.enemies) {
-        if (!enemy.dead && bulletHitsCircle(b, enemy.x, enemy.y, 15)) {
-          enemy.hp -= b.damage;
-          spawnText(world.fx, enemy.x, enemy.y - 18, `-${b.damage}`, '#ffdd57');
-          spawnParticles(world.fx, b.x, b.y, { count: 5, color: '#ff6b6b', speed: 130, life: 0.3, size: 4 });
-          if (enemy.hp <= 0) {
-            enemy.dead = true;
-            world.stats.kills += 1;
-            world.cash += 25;
-            spawnText(world.fx, enemy.x, enemy.y - 30, '+$25', '#7bf1a8');
-          } else {
-            enemy.state = 'hunt';
-          }
-          dead = true;
-          break;
-        }
-      }
-    }
-    if (!dead && b.owner === 'player') {
-      for (const ped of world.peds) {
-        if (!ped.down && bulletHitsCircle(b, ped.x, ped.y, 13)) {
-          ped.down = true;
-          ped.state = 'down';
-          scarePeds(world.peds, ped.x, ped.y, 320);
-          dead = true;
-          break;
-        }
-      }
-    }
-    if (!dead) {
-      for (const car of world.cars) {
-        if (car.dead) continue;
-        const dx = b.x - car.x;
-        const dy = b.y - car.y;
-        const along = Math.abs(dx * Math.cos(car.angle) + dy * Math.sin(car.angle));
-        const across = Math.abs(-dx * Math.sin(car.angle) + dy * Math.cos(car.angle));
-        if (along < car.length / 2 && across < car.width / 2 + 2) {
-          damageCar(car, b.damage, world.fx);
-          spawnParticles(world.fx, b.x, b.y, { count: 5, color: '#ffd166', speed: 150, life: 0.3, size: 3 });
-          dead = true;
-          break;
-        }
-      }
-    }
-    if (dead) world.bullets.splice(i, 1);
+  cycle() {
+    const i = WEAPON_ORDER.indexOf(this.current);
+    this.select(WEAPON_ORDER[(i + 1) % WEAPON_ORDER.length]);
   }
-}
 
-export function hurtPlayer(world, amount) {
-  const player = world.player;
-  let remaining = amount;
-  if (player.armor > 0) {
-    const absorbed = Math.min(player.armor, remaining);
-    player.armor -= absorbed;
-    remaining -= absorbed;
+  startReload() {
+    const w = this.weapon;
+    if (this.current === 'fists' || this.reloading > 0) return;
+    if (this.ammo[this.current] >= w.mag || this.reserve[this.current] <= 0) return;
+    this.reloading = 1.1;
+    this.reloadTotal = 1.1;
   }
-  player.hp -= remaining;
-  world.shake = Math.min(14, world.shake + 6);
-  spawnParticles(world.fx, player.x, player.y, { count: 6, color: '#ff6b6b', speed: 140, life: 0.35, size: 4 });
-  if (world.audio) world.audio.hit();
-  if (player.hp <= 0) {
-    player.hp = 0;
-    world.wasted = true;
-  }
-}
 
-export function punch(world) {
-  const player = world.player;
-  if (player.punchCd > 0 || player.car) return;
-  player.punchCd = PLAYER.punchCooldown;
-  if (world.audio) world.audio.punch();
-  const px = player.x + Math.cos(player.angle) * PLAYER.punchRange;
-  const py = player.y + Math.sin(player.angle) * PLAYER.punchRange;
-  spawnParticles(world.fx, px, py, { count: 4, color: '#ffffff', speed: 90, life: 0.2, size: 3 });
-  for (const enemy of world.enemies) {
-    if (!enemy.dead && Math.hypot(enemy.x - player.x, enemy.y - player.y) < PLAYER.punchRange + 14) {
-      enemy.hp -= PLAYER.punchDamage;
-      spawnText(world.fx, enemy.x, enemy.y - 18, `-${PLAYER.punchDamage}`, '#ffdd57');
-      if (enemy.hp <= 0) {
-        enemy.dead = true;
-        world.stats.kills += 1;
-      } else {
-        enemy.state = 'hunt';
+  update(dt) {
+    this.cooldown = Math.max(0, this.cooldown - dt);
+    this.muzzleFlash = Math.max(0, this.muzzleFlash - dt);
+    if (this.reloading > 0) {
+      this.reloading -= dt;
+      if (this.reloading <= 0) {
+        const w = this.weapon;
+        const need = w.mag - this.ammo[this.current];
+        const take = Math.min(need, this.reserve[this.current]);
+        this.ammo[this.current] += take;
+        this.reserve[this.current] -= take;
       }
-      return;
     }
   }
-  for (const ped of world.peds) {
-    if (!ped.down && Math.hypot(ped.x - player.x, ped.y - player.y) < PLAYER.punchRange + 12) {
-      ped.down = true;
-      ped.state = 'down';
-      scarePeds(world.peds, ped.x, ped.y, 300);
-      return;
-    }
-  }
-}
 
-export function stepEnemies(world, dt) {
-  const player = world.player;
-  const playerPos = player.car ? { x: player.car.x, y: player.car.y } : player;
-  for (const enemy of world.enemies) {
-    if (enemy.dead) continue;
-    const dx = playerPos.x - enemy.x;
-    const dy = playerPos.y - enemy.y;
-    const dist = Math.hypot(dx, dy);
-    if (enemy.state === 'hunt' || dist < 320) enemy.state = 'hunt';
-    if (enemy.state !== 'hunt') continue;
-    enemy.angle = Math.atan2(dy, dx);
-    if (dist > 240) {
-      const nx = enemy.x + Math.cos(enemy.angle) * enemy.speed * dt;
-      const ny = enemy.y + Math.sin(enemy.angle) * enemy.speed * dt;
-      if (!world.city.solidAt(nx, ny, 10)) {
-        enemy.x = nx;
-        enemy.y = ny;
-        enemy.walkPhase += dt * 10;
+  get canFire() {
+    return this.cooldown <= 0 && this.reloading <= 0;
+  }
+
+  // Fire from (ox, oz) along a heading. Returns a hit report the world
+  // turns into damage, particles and sound. `targets` is a list of
+  // {x, z, radius, kind, ref} to test the ray against.
+  fire(ox, oz, heading, targets) {
+    const w = this.weapon;
+    if (!this.canFire) return null;
+    if (this.current !== 'fists') {
+      if (this.ammo[this.current] <= 0) {
+        this.startReload();
+        return { dry: true };
+      }
+      this.ammo[this.current]--;
+    }
+    this.cooldown = w.rate;
+    this.muzzleFlash = 0.07;
+    const spread = (Math.random() - 0.5) * 2 * w.spread;
+    const a = heading + spread;
+    const dx = Math.sin(a);
+    const dz = Math.cos(a);
+    const endX = ox + dx * w.range;
+    const endZ = oz + dz * w.range;
+    let best = null;
+    let bestT = Infinity;
+    for (const t of targets) {
+      // Ray-circle intersection in the XZ plane.
+      const rx = t.x - ox;
+      const rz = t.z - oz;
+      const proj = rx * dx + rz * dz;
+      if (proj < 0 || proj > w.range) continue;
+      const px = ox + dx * proj;
+      const pz = oz + dz * proj;
+      const off = dist2D(px, pz, t.x, t.z);
+      if (off < (t.radius || 1.2) && proj < bestT) {
+        bestT = proj;
+        best = { ...t, hitX: px, hitZ: pz };
       }
     }
-    enemy.shootCd -= dt;
-    if (dist < 460 && enemy.shootCd <= 0) {
-      enemy.shootCd = 1.2 + Math.random() * 0.8;
-      shoot(world, enemy, enemy.angle + (Math.random() - 0.5) * 0.3, 'enemy', 9);
-      if (world.audio) world.audio.gunshot();
+    const hitX = best ? best.hitX : endX;
+    const hitZ = best ? best.hitZ : endZ;
+    this.lastShotFrom = [ox, oz];
+    this.lastShotTo = [hitX, hitZ];
+    return { hit: best, hitX, hitZ, damage: w.damage, weapon: this.current };
+  }
+
+  // An NPC (cop or rival) shoots at Mara: simpler — a timed shot with a
+  // miss chance, no ray needed.
+  npcShot(shooter, target, world) {
+    const d = dist2D(shooter.x, shooter.z, target.x, target.z);
+    if (d > 45) return;
+    const hitChance = clamp(0.62 - d * 0.008, 0.18, 0.62);
+    world.particles.muzzle(shooter.x, shooter.z, shooter.heading);
+    world.audio.shot(false);
+    if (Math.random() < hitChance) {
+      target.damage(8);
+      world.particles.blood(target.x, target.z);
+      if (target.isPlayer) world.onPlayerHit();
     }
   }
-}
 
-export function stepPickups(world) {
-  const player = world.player;
-  if (player.car) return;
-  for (const pickup of world.pickups) {
-    if (pickup.taken) continue;
-    pickup.bob += 0.05;
-    if (Math.hypot(pickup.x - player.x, pickup.y - player.y) < 26) {
-      pickup.taken = true;
-      if (pickup.kind === 'health') {
-        player.hp = Math.min(player.maxHp, player.hp + 40);
-        spawnText(world.fx, player.x, player.y - 24, '+40 HP', '#7bf1a8');
-      } else if (pickup.kind === 'armor') {
-        player.armor = Math.min(PLAYER.maxArmor, player.armor + 50);
-        spawnText(world.fx, player.x, player.y - 24, '+50 ARMOR', '#7cc7ff');
-      } else {
-        world.cash += 50;
-        spawnText(world.fx, player.x, player.y - 24, '+$50', '#ffd166');
+  // A punch: short range, no ammo, small knockback on peds.
+  punch(ox, oz, heading, targets) {
+    const w = WEAPONS.fists;
+    if (!this.canFire) return null;
+    this.cooldown = w.rate;
+    this.muzzleFlash = 0;
+    const endX = ox + Math.sin(heading) * w.range;
+    const endZ = oz + Math.cos(heading) * w.range;
+    for (const t of targets) {
+      if (dist2D(endX, endZ, t.x, t.z) < (t.radius || 1.2) + 0.8) {
+        return { hit: t, hitX: t.x, hitZ: t.z, damage: w.damage, weapon: 'fists' };
       }
-      if (world.audio) world.audio.pickup();
     }
+    return { hit: null, hitX: endX, hitZ: endZ, damage: 0, weapon: 'fists' };
   }
 }

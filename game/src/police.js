@@ -1,177 +1,302 @@
-// The heat: a wanted level from 0 to 5 stars, police cruisers that hunt
-// the player down and try to ram them off the road, foot cops at higher
-// levels, and the bust — stand still next to a cop for too long and the
-// run ends at the station. Hide long enough and the heat cools off.
+// The SBPD: heat, stars, and everything that hunts Mara. Cruisers
+// chase and ram, foot cops swarm from two stars, roadblocks close the
+// road from four — and from three stars a police helicopter joins the
+// hunt.
+//
+// HELICOPTER VISIBILITY (the v2.0 lesson): the old heli flew a high,
+// wide orbit and never entered the chase camera's frustum, so the money
+// shot had no helicopter in it. This heli flies LOW and CLOSE — about
+// 20 units up, slotted 36 ahead of the player along their heading,
+// tracking its slot fast (a slow heli lags behind a speeding car and
+// ends up overhead, above the frustum) — so it sits in the upper frame
+// of the chase cam together with its spotlight cone and the bright pool
+// it throws on the road. The chase camera also pitches up a few degrees
+// while the heli is up.
 
-import { WANTED } from './config.js';
-import { createCar, stepCar } from './vehicles.js';
+import { Car } from './vehicles.js';
+import { Walker } from './entities.js';
+import { WANTED, CALLSIGNS, WORLD } from './config.js';
+import { makeRng, shuffled } from './random.js';
+import { clamp, dist2D, damp } from './math3.js';
 
-export function createWanted() {
-  return { stars: 0, heat: 0, hiddenTimer: 0, bustTimer: 0, lastCrime: '' };
-}
+export class Helicopter {
+  constructor() {
+    this.x = 0;
+    this.y = 22;
+    this.z = 0;
+    this.heading = 0;
+    this.active = false;
+    this.orbitT = 0;
+    this.rotor = 0;
+    this.spotTarget = [0, 0]; // where the spotlight pool lands
+  }
 
-export function starsOf(wanted) {
-  return Math.min(5, Math.floor(wanted.heat / WANTED.heatPerStar));
-}
-
-export function addHeat(world, amount, crime) {
-  const wanted = world.wanted;
-  const before = starsOf(wanted);
-  wanted.heat = Math.min(5 * WANTED.heatPerStar, wanted.heat + amount);
-  wanted.hiddenTimer = 0;
-  wanted.lastCrime = crime;
-  const after = starsOf(wanted);
-  wanted.stars = after;
-  if (after > before) {
-    world.banner = { text: `WANTED LEVEL ${after} — ${crime.toUpperCase()}`, color: '#ff4d4d', until: world.time + 2.5 };
-    if (world.audio) world.audio.siren(true);
+  // The heli holds a slot ahead of the player: forward along their
+  // heading, high enough to clear the towers' mid-floors, close enough
+  // to stay in the chase camera's view.
+  update(dt, player, playerHeading) {
+    this.orbitT += dt;
+    this.rotor += dt * 30;
+    const fx = Math.sin(playerHeading);
+    const fz = Math.cos(playerHeading);
+    const side = Math.sin(this.orbitT * 0.45) * 8;
+    const sx = -fz * side;
+    const sz = fx * side;
+    const wantX = player.x + fx * 36 + sx;
+    const wantZ = player.z + fz * 36 + sz;
+    const wantY = 20 + Math.sin(this.orbitT * 0.7) * 2;
+    this.x = damp(this.x, wantX, 4.0, dt);
+    this.z = damp(this.z, wantZ, 4.0, dt);
+    this.y = damp(this.y, wantY, 4.0, dt);
+    this.heading = Math.atan2(player.x - this.x, player.z - this.z);
+    // The spotlight tracks the player with a slight lag.
+    this.spotTarget[0] = damp(this.spotTarget[0], player.x, 2.5, dt);
+    this.spotTarget[1] = damp(this.spotTarget[1], player.z, 2.5, dt);
   }
 }
 
-function spawnCopCar(world, rng) {
-  const player = world.player;
-  const angle = rng.range(0, Math.PI * 2);
-  const dist = rng.range(700, 950);
-  let x = player.x + Math.cos(angle) * dist;
-  let y = player.y + Math.sin(angle) * dist;
-  x = Math.max(80, Math.min(3120, x));
-  y = Math.max(80, Math.min(2320, y));
-  const near = world.city.nearestRoadPoint(x, y);
-  const car = createCar(rng, near.x, near.y, Math.atan2(player.y - near.y, player.x - near.x), 'police', 'police');
-  world.cars.push(car);
-  return car;
-}
-
-function spawnFootCop(world, rng) {
-  const player = world.player;
-  const angle = rng.range(0, Math.PI * 2);
-  const dist = rng.range(220, 380);
-  const x = Math.max(60, Math.min(3140, player.x + Math.cos(angle) * dist));
-  const y = Math.max(60, Math.min(2340, player.y + Math.sin(angle) * dist));
-  if (world.city.solidAt(x, y, 10)) return;
-  world.cops.push({ x, y, angle: 0, speed: 0, state: 'chase', shootCd: rng.range(0.5, 1.5) });
-}
-
-function copTargetCount(stars) {
-  return stars <= 0 ? 0 : stars === 1 ? 1 : stars === 2 ? 2 : stars === 3 ? 3 : stars === 4 ? 4 : 5;
-}
-
-export function stepPolice(world, dt, rng) {
-  const wanted = world.wanted;
-  const stars = starsOf(wanted);
-  wanted.stars = stars;
-  const player = world.player;
-  const playerPos = player.car ? { x: player.car.x, y: player.car.y } : player;
-
-  // Keep the right number of cruisers on the street.
-  const cruisers = world.cars.filter((c) => c.role === 'police' && !c.dead);
-  const want = copTargetCount(stars);
-  if (cruisers.length < want && stars > 0) {
-    if (Math.random() < dt * 1.2) spawnCopCar(world, rng);
+export class Police {
+  constructor(city, seed) {
+    this.city = city;
+    this.rng = makeRng(seed);
+    this.heat = 0; // 0–100
+    this.cruisers = [];
+    this.cops = []; // foot cops
+    this.roadblocks = []; // {x, z, heading, cars}
+    this.heli = new Helicopter();
+    this.spawnTimer = 0;
+    this.copTimer = 0;
+    this.blockTimer = 0;
+    this.bustedTimer = 0;
+    this.callsigns = shuffled(this.rng, CALLSIGNS);
+    this.callsignIdx = 0;
+    this.sirenOn = false;
   }
-  // Foot cops join from two stars up.
-  if (stars >= 2 && world.cops.length < stars - 1 && Math.random() < dt * 0.5) {
-    spawnFootCop(world, rng);
-  }
-  if (stars === 0 && world.audio) world.audio.siren(false);
-  if (stars > 0 && world.audio) world.audio.siren(true);
 
-  // Is any cop close enough to see the player?
-  let seen = false;
-  for (const car of cruisers) {
-    if (Math.hypot(car.x - playerPos.x, car.y - playerPos.y) < 620) seen = true;
+  get stars() {
+    if (this.heat <= 0) return 0;
+    return Math.min(5, Math.floor(this.heat / 20) + 1);
   }
-  for (const cop of world.cops) {
-    if (Math.hypot(cop.x - playerPos.x, cop.y - playerPos.y) < 480) seen = true;
+
+  get wanted() {
+    return this.stars > 0;
   }
-  if (stars > 0) {
-    if (seen) {
-      wanted.hiddenTimer = 0;
+
+  nextCallsign() {
+    const c = this.callsigns[this.callsignIdx % this.callsigns.length];
+    this.callsignIdx++;
+    return c;
+  }
+
+  addHeat(amount) {
+    this.heat = clamp(this.heat + amount, 0, 100);
+  }
+
+  // The dispatch list the HUD shows: every unit, its callsign, its
+  // distance from Mara and its current role.
+  dispatchList(player) {
+    const out = [];
+    for (const c of this.cruisers) {
+      out.push({
+        callsign: c.callsign || 'UNIT',
+        role: c.role || 'PURSUE',
+        dist: Math.round(dist2D(c.x, c.z, player.x, player.z)),
+      });
+    }
+    for (const c of this.cops) {
+      if (!c.alive) continue;
+      out.push({
+        callsign: c.callsign || 'OFFICER',
+        role: 'ON FOOT',
+        dist: Math.round(dist2D(c.x, c.z, player.x, player.z)),
+      });
+    }
+    if (this.heli.active) {
+      out.push({
+        callsign: 'CONDOR-1',
+        role: 'AIR SUPPORT',
+        dist: Math.round(dist2D(this.heli.x, this.heli.z, player.x, player.z)),
+      });
+    }
+    out.sort((a, b) => a.dist - b.dist);
+    return out.slice(0, 6);
+  }
+
+  update(dt, player, playerCar, world) {
+    const stars = this.stars;
+    this.sirenOn = stars > 0;
+
+    // Heat decays while no unit can see Mara.
+    const seen = this.cruisers.some((c) => dist2D(c.x, c.z, player.x, player.z) < 60)
+      || this.cops.some((c) => c.alive && dist2D(c.x, c.z, player.x, player.z) < 40)
+      || this.heli.active;
+    if (!seen && this.heat > 0) {
+      this.heat = Math.max(0, this.heat - WANTED.heatLoss * dt);
+    }
+
+    // Helicopter.
+    if (stars >= WANTED.heliAt) {
+      if (!this.heli.active) {
+        this.heli.active = true;
+        this.heli.x = player.x + 20;
+        this.heli.z = player.z - 20;
+        this.heli.y = 20;
+        this.heli.spotTarget = [player.x, player.z];
+      }
+      const heading = playerCar ? playerCar.heading : player.heading;
+      this.heli.update(dt, player, heading);
     } else {
-      wanted.hiddenTimer += dt;
-      if (wanted.hiddenTimer > WANTED.decayDelay) {
-        wanted.heat = Math.max(0, wanted.heat - WANTED.decayRate * dt);
-        if (starsOf(wanted) < stars) {
-          world.banner = { text: 'HEAT COOLING OFF — STAY HIDDEN', color: '#ffd166', until: world.time + 2 };
+      this.heli.active = false;
+    }
+
+    // Spawn cruisers up to the star count.
+    this.spawnTimer -= dt;
+    const want = WANTED.cruisersByStar[stars] || 0;
+    if (this.cruisers.length < want && this.spawnTimer <= 0) {
+      this.spawnTimer = 2.5;
+      this.spawnCruiser(player);
+    }
+
+    // Foot cops from two stars.
+    this.copTimer -= dt;
+    if (stars >= WANTED.footCopsAt && this.cops.filter((c) => c.alive).length < stars && this.copTimer <= 0) {
+      this.copTimer = 3;
+      this.spawnCop(player);
+    }
+
+    // Roadblocks from four stars: two cruisers parked across the road
+    // ahead of Mara's heading.
+    this.blockTimer -= dt;
+    if (stars >= WANTED.roadblockAt && this.roadblocks.length < 2 && this.blockTimer <= 0) {
+      this.blockTimer = 18;
+      this.placeRoadblock(player, playerCar);
+    }
+
+    // Cruiser AI: chase, ram, and PIT when alongside. Roadblock cars
+    // hold their ground — they are parked across the road on purpose.
+    for (const c of this.cruisers) {
+      if (c.wrecked || c.role === 'ROADBLOCK') continue;
+      const d = dist2D(c.x, c.z, player.x, player.z);
+      const wantHeading = Math.atan2(player.x - c.x, player.z - c.z);
+      let diff = wantHeading - c.heading;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      // Aim slightly ahead of a moving player to intercept.
+      const steer = clamp(diff * 2.2, -1, 1);
+      let throttle = 1;
+      if (d < 6 && playerCar) {
+        // Ram: full throttle into the player's flank.
+        throttle = 1;
+        c.role = 'RAMMING';
+      } else if (d < 14) {
+        c.role = 'PURSUE';
+      } else {
+        c.role = 'INTERCEPT';
+      }
+      // Don't overshoot a stopped player: brake in close.
+      if (d < 4 && !playerCar) throttle = -1;
+      c.drive(throttle, steer, false, dt);
+      c.sirenPhase += dt * 9;
+      // Collision with the player's car.
+      if (playerCar) c.collideWith(playerCar);
+      // Cops also bump traffic out of the way.
+      for (const t of world.traffic.cars) {
+        if (!t.wrecked) c.collideWith(t);
+      }
+    }
+    this.cruisers = this.cruisers.filter((c) => !c.wrecked || dist2D(c.x, c.z, player.x, player.z) < 80);
+
+    // Foot cops: run at Mara, shoot when close.
+    for (const cop of this.cops) {
+      if (!cop.alive) continue;
+      const d = dist2D(cop.x, cop.z, player.x, player.z);
+      if (d > 10) {
+        cop.stepToward(player.x, player.z, 7, dt, 8);
+      } else {
+        cop.moving = false;
+        cop.speed = 0;
+        cop.heading = Math.atan2(player.x - cop.x, player.z - cop.z);
+        cop.shootTimer -= dt;
+        if (cop.shootTimer <= 0 && world) {
+          cop.shootTimer = 1.1;
+          world.combat.npcShot(cop, player, world);
         }
       }
+      const cc = this.city.collide(cop.x, cop.z, 0.7);
+      cop.x = cc[0];
+      cop.z = cc[1];
     }
-  }
 
-  // Cruiser chase: steer at the player, ram when close, back off wrecks.
-  for (const car of cruisers) {
-    const dx = playerPos.x - car.x;
-    const dy = playerPos.y - car.y;
-    const dist = Math.hypot(dx, dy);
-    const wantedAngle = Math.atan2(dy, dx);
-    let diff = wantedAngle - car.angle;
-    while (diff > Math.PI) diff -= Math.PI * 2;
-    while (diff < -Math.PI) diff += Math.PI * 2;
-    const throttle = dist > 60 ? 1 : 0.4;
-    stepCar(car, {
-      throttle,
-      steer: Math.max(-1, Math.min(1, diff * 2.6)),
-      handbrake: false,
-    }, dt, world.city, world.fx, world.audio);
-  }
-
-  // Foot cops run at the player and, at three stars, shoot.
-  for (let i = world.cops.length - 1; i >= 0; i -= 1) {
-    const cop = world.cops[i];
-    const dx = playerPos.x - cop.x;
-    const dy = playerPos.y - cop.y;
-    const dist = Math.hypot(dx, dy);
-    if (stars === 0 && dist > 500) {
-      world.cops.splice(i, 1);
-      continue;
-    }
-    const speed = 185;
-    cop.angle = Math.atan2(dy, dx);
-    if (dist > 30) {
-      const nx = cop.x + Math.cos(cop.angle) * speed * dt;
-      const ny = cop.y + Math.sin(cop.angle) * speed * dt;
-      if (!world.city.solidAt(nx, ny, 10)) {
-        cop.x = nx;
-        cop.y = ny;
+    // Busted: pinned at low speed with a cruiser on top of Mara.
+    if (stars > 0 && playerCar && Math.abs(playerCar.speed) < 1.5) {
+      const close = this.cruisers.some((c) => !c.wrecked && dist2D(c.x, c.z, player.x, player.z) < 7);
+      if (close) {
+        this.bustedTimer += dt;
+        if (this.bustedTimer > WANTED.bustedWait) {
+          world.busted();
+          this.bustedTimer = 0;
+        }
+      } else {
+        this.bustedTimer = 0;
       }
+    } else {
+      this.bustedTimer = 0;
     }
-    cop.shootCd -= dt;
-    if (stars >= 3 && dist < 420 && dist > 60 && cop.shootCd <= 0 && !player.car) {
-      cop.shootCd = 1.1 + Math.random() * 0.7;
-      world.pendingShots.push({ x: cop.x, y: cop.y, angle: cop.angle + (Math.random() - 0.5) * 0.25, from: 'cop', damage: 8 });
-      if (world.audio) world.audio.gunshot();
-    }
+
+    // Roadblock cars sit still; clean up blocks far behind.
+    this.roadblocks = this.roadblocks.filter((rb) => dist2D(rb.x, rb.z, player.x, player.z) < 260);
   }
 
-  // The bust: a cop beside a slow player, on foot or stalled in a car.
-  const playerSpeed = player.car ? Math.abs(player.car.speed) : (player.moving ? 200 : 0);
-  let busting = false;
-  if (stars > 0 && playerSpeed < 40) {
-    for (const cop of world.cops) {
-      if (Math.hypot(cop.x - playerPos.x, cop.y - playerPos.y) < WANTED.bustRange) busting = true;
-    }
-    for (const car of cruisers) {
-      if (Math.abs(car.speed) < 30 && Math.hypot(car.x - playerPos.x, car.y - playerPos.y) < WANTED.bustRange + 14) busting = true;
-    }
+  spawnCruiser(player) {
+    const a = this.rng() * Math.PI * 2;
+    const r = 55 + this.rng() * 25;
+    const x = player.x + Math.cos(a) * r;
+    const z = player.z + Math.sin(a) * r;
+    const c = new Car('police', [0.09, 0.09, 0.11], x, z, Math.atan2(player.x - x, player.z - z));
+    c.driver = 'police';
+    c.callsign = this.nextCallsign();
+    c.role = 'PURSUE';
+    c.speed = 18;
+    this.cruisers.push(c);
   }
-  if (busting) {
-    wanted.bustTimer += dt;
-    if (wanted.bustTimer >= WANTED.bustTime) return 'busted';
-  } else {
-    wanted.bustTimer = 0;
-  }
-  return null;
-}
 
-export function clearWanted(world) {
-  world.wanted.heat = 0;
-  world.wanted.stars = 0;
-  world.wanted.bustTimer = 0;
-  world.wanted.hiddenTimer = 0;
-  for (const car of world.cars) {
-    if (car.role === 'police') car.dead = true;
+  spawnCop(player) {
+    const a = this.rng() * Math.PI * 2;
+    const r = 18 + this.rng() * 10;
+    const cop = new Walker(player.x + Math.cos(a) * r, player.z + Math.sin(a) * r, 0, 'cop');
+    cop.shirt = [0.1, 0.2, 0.55];
+    cop.pants = [0.12, 0.14, 0.2];
+    cop.callsign = this.nextCallsign();
+    cop.shootTimer = 0.8;
+    this.cops.push(cop);
   }
-  world.cars = world.cars.filter((c) => c.role !== 'police');
-  world.cops = [];
-  if (world.audio) world.audio.siren(false);
+
+  placeRoadblock(player, playerCar) {
+    const heading = playerCar ? playerCar.heading : player.heading;
+    const fx = Math.sin(heading);
+    const fz = Math.cos(heading);
+    const ahead = 90 + this.rng() * 30;
+    const bx = player.x + fx * ahead;
+    const bz = player.z + fz * ahead;
+    const perp = heading + Math.PI / 2;
+    const cars = [];
+    for (const off of [-5, 5]) {
+      const c = new Car('police', [0.09, 0.09, 0.11], bx + Math.sin(perp) * off, bz + Math.cos(perp) * off, perp);
+      c.driver = 'police';
+      c.callsign = this.nextCallsign();
+      c.role = 'ROADBLOCK';
+      cars.push(c);
+    }
+    this.roadblocks.push({ x: bx, z: bz, heading, cars });
+    for (const c of cars) this.cruisers.push(c);
+  }
+
+  clearHeat() {
+    this.heat = 0;
+    this.cruisers = [];
+    this.cops = [];
+    this.roadblocks = [];
+    this.heli.active = false;
+    this.sirenOn = false;
+  }
 }
