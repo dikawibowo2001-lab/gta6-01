@@ -1,5 +1,7 @@
 # Solmar Bay — Sun, Sand & Sirens
 
+[![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01) [![rank](https://make.fun/badge/gta6-01/dikawibowo2001-lab/gta6-01/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01) [![reward](https://make.fun/badge/gta6-01/dikawibowo2001-lab/gta6-01/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+
 A 3D open-world crime game in the spirit of GTA 6, built from scratch
 in raw WebGL for the make.fun **gta6-01** bounty. No game engine, no
 libraries, no network: plain static files that run offline in a
